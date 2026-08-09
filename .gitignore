@@ -1,0 +1,21 @@
+# Never commit API credentials or tokens
+credentials.json
+*.token
+.env
+.env.*
+
+# Your own watch history / import artefacts
+unmatched.csv
+watched.csv
+watched.json
+data/
+!sample_data/watched.csv
+!sample_data/watched.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/

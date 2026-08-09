@@ -1,0 +1,35 @@
+{
+  "shows": [
+    {
+      "title": "The Wire",
+      "year": 2002,
+      "ids": { "imdb": "tt0306414" },
+      "season": 1,
+      "episode": 1,
+      "watched_at": "2008-06-01T22:00:00Z"
+    },
+    {
+      "title": "The Wire",
+      "year": 2002,
+      "ids": { "imdb": "tt0306414" },
+      "season": 1,
+      "episode": 2,
+      "watched_at": "2008-06-02T22:00:00Z"
+    },
+    {
+      "title": "Chernobyl",
+      "year": 2019,
+      "status": "completed",
+      "watched_at": "2019-06-30T21:00:00Z"
+    }
+  ],
+  "movies": [
+    {
+      "title": "Arrival",
+      "year": 2016,
+      "ids": { "imdb": "tt2543164", "tmdb": 329865 },
+      "rating": 9,
+      "watched_at": "2017-01-15T20:00:00Z"
+    }
+  ]
+}

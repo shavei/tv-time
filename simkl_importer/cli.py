@@ -10,12 +10,13 @@ from typing import List, Optional
 from .auth import ensure_token, verify_token
 from .client import AuthError, BudgetExceeded, SimklClient, SimklError
 from .config import DEFAULT_DAILY_LIMIT, Credentials, Store
-from .discovery import ask, run_discovery
+from .discovery import ask, collect_session, run_discovery
 from .images import DEFAULT_WIDTH, PosterRenderer
 from .matching import Matcher
 from .models import WatchItem
 from .parsers import ParseError, load_file
 from .sync import DEFAULT_BATCH_SIZE, push_history, write_unmatched_csv
+from .web import run_web_discovery
 
 BANNER = r"""
  ____  _       _    _   _____                       _
@@ -52,8 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ask before accepting a weak title match")
     parser.add_argument("--refresh-library", action="store_true",
                         help="re-download the list of titles already on your account")
+    parser.add_argument("--tui", action="store_true",
+                        help="run discovery in the terminal instead of the browser")
+    parser.add_argument("--web-port", type=int, default=0,
+                        help="port for the browser picker (default: pick a free one)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="print the picker URL instead of opening a browser")
     parser.add_argument("--no-posters", action="store_true",
-                        help="do not draw poster thumbnails in discovery mode")
+                        help="do not draw poster thumbnails in the terminal walkthrough")
     parser.add_argument("--poster-width", type=int, default=DEFAULT_WIDTH,
                         help=f"poster width in terminal columns (default {DEFAULT_WIDTH})")
     parser.add_argument("--no-taste", action="store_true",
@@ -180,15 +187,36 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
     if args.forget_rejected:
         store.save_rejected({})
         print("  Cleared the list of titles you previously passed on.")
+    print("\n" + "=" * 60)
+    print("Discovery mode - let's work out what you have watched")
+    print("=" * 60)
+
     try:
-        queue = run_discovery(
+        session = collect_session(
             client,
             store,
-            existing=queue,
+            queue,
             refresh_library=args.refresh_library,
-            renderer=make_renderer(args, client, store),
             use_taste=not args.no_taste,
         )
+        if not session["ranked"]:
+            return queue
+        if args.tui:
+            queue = run_discovery(
+                client,
+                store,
+                existing=queue,
+                renderer=make_renderer(args, client, store),
+                session=session,
+            )
+        else:
+            queue = run_web_discovery(
+                session,
+                store,
+                queue,
+                port=args.web_port,
+                open_browser=not args.no_browser,
+            )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")
     save_queue(store, queue)

@@ -312,24 +312,20 @@ def ask_progress(item: WatchItem) -> bool:
         return True
 
 
-def run_discovery(
+def collect_session(
     client: SimklClient,
     store: Store,
-    existing: Optional[List[WatchItem]] = None,
+    queue: List[WatchItem],
     refresh_library: bool = False,
-    renderer: Optional[PosterRenderer] = None,
     use_taste: bool = True,
-) -> List[WatchItem]:
-    """Interactive session. Returns the queue of confirmed watched items."""
-    queue: List[WatchItem] = list(existing or [])
+) -> Dict[str, Any]:
+    """Ask the setup questions, then build the ranked candidate list.
+
+    Shared by both front-ends: the terminal walkthrough and the local web UI
+    both need exactly this, and only differ in how they show the results.
+    """
     queued_keys: Set[Any] = {item.dedupe_key() for item in queue}
     rejected: Dict[str, Any] = store.load_rejected()
-
-    print("\n" + "=" * 60)
-    print("Discovery mode - let's work out what you have watched")
-    print("=" * 60)
-    if renderer and not renderer.enabled and renderer.reason:
-        print(f"  (posters off: {renderer.reason})")
 
     print("\nWhich do you want to go through?")
     print("  1) TV shows   2) Movies   3) Anime   4) all of them")
@@ -413,9 +409,45 @@ def run_discovery(
     )
     if not ranked:
         print("  Nothing new to ask about - try more genres, or a larger count per genre.")
-        return queue
-    if not profile.empty:
+    elif not profile.empty:
         print("  Ordered best-match first based on what you have already accepted.")
+
+    return {
+        "ranked": ranked,
+        "profile": profile,
+        "rejected": rejected,
+        "queued_keys": queued_keys,
+        "in_library": in_library,
+        "skipped_before": skipped_before,
+    }
+
+
+def run_discovery(
+    client: SimklClient,
+    store: Store,
+    existing: Optional[List[WatchItem]] = None,
+    refresh_library: bool = False,
+    renderer: Optional[PosterRenderer] = None,
+    use_taste: bool = True,
+    session: Optional[Dict[str, Any]] = None,
+) -> List[WatchItem]:
+    """Terminal walkthrough. Returns the queue of confirmed watched items."""
+    queue: List[WatchItem] = list(existing or [])
+
+    if session is None:
+        # the caller usually prints the banner and builds the session for us
+        print("\n" + "=" * 60)
+        print("Discovery mode - let's work out what you have watched")
+        print("=" * 60)
+        session = collect_session(client, store, queue, refresh_library, use_taste)
+    if renderer and not renderer.enabled and renderer.reason:
+        print(f"  (posters off: {renderer.reason})")
+    ranked = session["ranked"]
+    profile = session["profile"]
+    rejected = session["rejected"]
+    queued_keys = session["queued_keys"]
+    if not ranked:
+        return queue
     print(MENU_HELP)
 
     index = 0

@@ -71,6 +71,8 @@ class WatchItem:
     watched_at: Optional[str] = None
     rating: Optional[int] = None
     source: str = "file"
+    poster: str = ""
+    genres: List[str] = field(default_factory=list)
     # set by the matcher; None until we have tried to resolve it
     matched: Optional[bool] = None
     match_note: str = ""
@@ -150,6 +152,9 @@ class WatchItem:
         self.status = self.status or other.status
         self.watched_at = self.watched_at or other.watched_at
         self.rating = self.rating if self.rating is not None else other.rating
+        self.poster = self.poster or other.poster
+        if other.genres and not self.genres:
+            self.genres = list(other.genres)
         for number, season in other.seasons.items():
             if not season.episodes:
                 self.add_episode(number, None, season.watched_at)
@@ -210,6 +215,8 @@ class WatchItem:
             "watched_at": self.watched_at,
             "rating": self.rating,
             "source": self.source,
+            "poster": self.poster,
+            "genres": self.genres,
             "seasons": [
                 {
                     "number": season.number,
@@ -234,6 +241,8 @@ class WatchItem:
             watched_at=raw.get("watched_at"),
             rating=raw.get("rating"),
             source=raw.get("source", "file"),
+            poster=raw.get("poster", ""),
+            genres=list(raw.get("genres") or []),
         )
         for season in raw.get("seasons") or []:
             number = int(season["number"])

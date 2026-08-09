@@ -11,6 +11,7 @@ from .auth import ensure_token, verify_token
 from .client import AuthError, BudgetExceeded, SimklClient, SimklError
 from .config import DEFAULT_DAILY_LIMIT, Credentials, Store
 from .discovery import ask, run_discovery
+from .images import DEFAULT_WIDTH, PosterRenderer
 from .matching import Matcher
 from .models import WatchItem
 from .parsers import ParseError, load_file
@@ -51,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ask before accepting a weak title match")
     parser.add_argument("--refresh-library", action="store_true",
                         help="re-download the list of titles already on your account")
+    parser.add_argument("--no-posters", action="store_true",
+                        help="do not draw poster thumbnails in discovery mode")
+    parser.add_argument("--poster-width", type=int, default=DEFAULT_WIDTH,
+                        help=f"poster width in terminal columns (default {DEFAULT_WIDTH})")
+    parser.add_argument("--no-taste", action="store_true",
+                        help="do not rank discovery candidates by your taste profile")
+    parser.add_argument("--forget-rejected", action="store_true",
+                        help="ask again about titles you previously said no to")
     parser.add_argument("--unmatched-out", type=Path, default=Path("unmatched.csv"),
                         help="where to write titles that could not be imported")
     parser.add_argument("--home", type=Path, help="override the config directory (~/.simkl-importer)")
@@ -158,9 +167,28 @@ def action_import_file(args, client: SimklClient, store: Store, queue: List[Watc
     return merge_into_queue(queue, matched)
 
 
+def make_renderer(args, client: SimklClient, store: Store) -> PosterRenderer:
+    return PosterRenderer(
+        session=client.session,
+        cache_dir=store.poster_dir,
+        width=args.poster_width,
+        enabled=not args.no_posters,
+    )
+
+
 def action_discover(args, client: SimklClient, store: Store, queue: List[WatchItem]) -> List[WatchItem]:
+    if args.forget_rejected:
+        store.save_rejected({})
+        print("  Cleared the list of titles you previously passed on.")
     try:
-        queue = run_discovery(client, store, existing=queue, refresh_library=args.refresh_library)
+        queue = run_discovery(
+            client,
+            store,
+            existing=queue,
+            refresh_library=args.refresh_library,
+            renderer=make_renderer(args, client, store),
+            use_taste=not args.no_taste,
+        )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")
     save_queue(store, queue)

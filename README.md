@@ -7,7 +7,9 @@ Two ways to get your history in, and they share the same import pipeline:
 1. **File import** — parse a `watched.csv` / `watched.json` export and mark
    everything in it as watched.
 2. **Discovery mode** — no export? Answer a stream of yes/no questions about
-   popular titles in the genres you like, and say how much of each you watched.
+   titles in the genres you like, with the poster shown next to each one, and
+   say how much of each you watched. Every answer teaches it: later rounds are
+   ordered best-match first and never re-ask about something you passed on.
 
 Both feed a local queue which is then pushed to `POST /sync/history` in batches,
 with rate limiting, retries and a report of anything that could not be matched.
@@ -36,6 +38,7 @@ handy — the script asks for them on first run and stores them in
 python -m simkl_importer                       # interactive menu
 python -m simkl_importer --file watched.csv    # parse a file and import it
 python -m simkl_importer --discover            # interactive discovery session
+python -m simkl_importer --discover --no-posters        # skip the thumbnails
 python -m simkl_importer --send                # push the saved queue
 python -m simkl_importer --file watched.csv --dry-run   # parse + match, post nothing
 ```
@@ -88,22 +91,64 @@ Favourite shows or movies (comma separated, blank to skip).
 Genres to browse (comma separated).
 ```
 
-Favourites are looked up to seed the genre list, then popular titles are pulled
-per genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`, sorted by
-`popular-this-month`), optionally topped up from Simkl Trending. Anything already
-on your account is filtered out first, then each remaining title is offered:
+Favourites are looked up to seed the genre list, then titles are pulled per
+genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`, sorted by
+`popular-this-month`), optionally topped up from Simkl Trending. Anything
+already on your account, already queued, or previously rejected is filtered out,
+and the rest is ranked against your taste profile and offered one at a time:
 
 ```
-[7/120] Severance (2022)  (Drama, Mystery | Simkl 8.9)   <drama>
+▄▄▄▄▄▄▄▄▄▄  [7/120]
+██▓▓▒▒░░██  Severance (2022)
+██▓▓▒▒░░██  Drama, Mystery
+██▓▓▒▒░░██  Simkl 8.9  IMDb 8.7
+██▓▓▒▒░░██  ████████░░ 84% match
+▀▀▀▀▀▀▀▀▀▀  from: drama
+
       Watched it? [y/N/s/b/q]: y
       How much? (all / s1 / 1-3 / s2e5 / s2e1-10, blank = all, x = never mind)
       > s1, s2e1-4
       queued: S01 (all), S02 x4ep
 ```
 
-`s` skips the rest of that genre, `b` goes back one, `q` stops and keeps the
-queue. The queue is written to disk after every answer, so a long session
-survives Ctrl-C — resume with `--send`.
+`n` (or just Enter) skips, `s` skips the rest of that genre, `b` goes back one,
+`q` stops and keeps the queue. The queue is written to disk after every answer,
+so a long session survives Ctrl-C — resume with `--send`.
+
+### Posters
+
+Thumbnails are drawn with 24-bit colour half-blocks, which Windows Terminal,
+iTerm2 and most modern terminals handle. Images come from Simkl's
+`wsrv.nl` CDN pre-resized to the size actually being painted, and are cached
+forever in `~/.simkl-importer/posters/` as Simkl's docs require, so each poster
+is downloaded exactly once.
+
+Posters turn themselves off and say why if Pillow is missing or the terminal
+does not report colour support. `--no-posters` disables them; `--poster-width N`
+changes the size (default 22 columns).
+
+### Taste profile
+
+Every title you accept is recorded in `~/.simkl-importer/accepted.json` — which,
+unlike the queue, is *not* cleared when you send. From it the script builds a
+profile of genres and decades, and every "no" is remembered in `rejected.json`
+as a negative signal.
+
+Round two then:
+
+* ranks candidates by genre affinity, with common genres damped by IDF so
+  "drama" does not drown out "cyberpunk", plus small nudges for rating and for
+  the decades you tend to watch;
+* shows the resulting `84% match` bar and offers the best matches first;
+* suggests genres to browse instead of making you think of them;
+* never asks about anything you already said no to.
+
+If there is nothing recorded yet but your account already has titles in it, the
+first round seeds the profile from that library instead (up to 150 titles, genre
+lookups cached forever in `genre-cache.json`).
+
+`--no-taste` falls back to plain popularity order. `--forget-rejected` starts
+asking about passed-over titles again.
 
 ## Rate limiting and quotas
 
@@ -158,6 +203,10 @@ and are appended to the same CSV.
 | `--no-resolve` | do not pre-resolve IDs |
 | `--interactive-match` | confirm weak title matches by hand |
 | `--refresh-library` | re-download what is already on your account |
+| `--no-posters` | do not draw poster thumbnails |
+| `--poster-width N` | poster width in terminal columns (default 22) |
+| `--no-taste` | rank by popularity instead of your taste profile |
+| `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |
 | `--verbose` | log every HTTP request |
@@ -171,8 +220,9 @@ Credentials can also come from `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET` and
 pip install pytest && python -m pytest tests -q
 ```
 
-The suite is fully offline — parsing, payload shapes, batching and the progress
-mini-language. Nothing in it touches the network.
+The suite is fully offline — parsing, payload shapes, batching, the progress
+mini-language, taste ranking and poster rendering. Nothing in it touches the
+network.
 
 ## Layout
 
@@ -185,6 +235,8 @@ simkl_importer/
   parsers.py     watched.csv / watched.json -> WatchItem
   matching.py    title -> Simkl ID resolution, with an on-disk cache
   discovery.py   the interactive yes/no session
+  taste.py       taste profile from your answers, and candidate ranking
+  images.py      poster thumbnails as terminal colour blocks
   progress.py    "s1, s2e1-4" -> seasons/episodes
   sync.py        batching, POST /sync/history, reporting
   models.py      WatchItem and the Simkl payload shapes

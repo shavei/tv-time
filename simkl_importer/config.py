@@ -65,6 +65,10 @@ class Store:
         self.cache_path = self.home / "match-cache.json"
         self.queue_path = self.home / "queue.json"
         self.library_path = self.home / "library.json"
+        self.rejected_path = self.home / "rejected.json"
+        self.genre_cache_path = self.home / "genre-cache.json"
+        self.accepted_path = self.home / "accepted.json"
+        self.poster_dir = self.home / "posters"
 
     # ------------------------------------------------------------- json utils
 
@@ -174,6 +178,30 @@ class Store:
     def clear_queue(self) -> None:
         if self.queue_path.exists():
             self.queue_path.unlink()
+
+    def load_rejected(self) -> Dict[str, Any]:
+        """Titles answered "no", so a later round does not ask again."""
+        return self._read_json(self.rejected_path, {})
+
+    def save_rejected(self, rejected: Dict[str, Any]) -> None:
+        self._write_json(self.rejected_path, rejected)
+
+    def load_accepted(self) -> list:
+        """Everything ever accepted in discovery - the taste memory.
+
+        Unlike the queue this is never cleared on send, so later rounds still
+        know what you like.
+        """
+        return self._read_json(self.accepted_path, [])
+
+    def save_accepted(self, accepted: list) -> None:
+        self._write_json(self.accepted_path, accepted)
+
+    def load_genre_cache(self) -> Dict[str, Any]:
+        return self._read_json(self.genre_cache_path, {})
+
+    def save_genre_cache(self, cache: Dict[str, Any]) -> None:
+        self._write_json(self.genre_cache_path, cache)
 
     def load_library(self) -> Dict[str, Any]:
         return self._read_json(self.library_path, {})

@@ -1,24 +1,42 @@
 """Interactive discovery: work out what you have watched by asking about it.
 
-Rather than needing a complete export, this walks you through popular titles in
-the genres you care about and asks "seen it?" one by one. Anything you say yes
-to is queued for the same /sync/history import the file path uses.
+Rather than needing a complete export, this walks you through titles and asks
+"seen it?" one by one. Anything you say yes to is queued for the same
+/sync/history import the file path uses.
+
+Later rounds are not a repeat of the first: everything you have accepted builds
+a taste profile, everything you rejected is remembered and never asked about
+again, and candidates are ordered best-match first with the poster shown
+alongside.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .client import SimklClient, SimklError
 from .config import Store
+from .images import PosterRenderer
 from .matching import candidate_ids
-from .models import ANIME, MOVIE, TV, WatchItem, normalize_title
+from .models import ANIME, MOVIE, TV, WatchItem
 from .progress import ProgressError, apply_progress, parse_progress
+from .taste import (
+    GenreLookup,
+    TasteProfile,
+    build_profile,
+    candidate_genres,
+    rank_entries,
+)
 
 SECTION_TO_TYPE = {"tv": TV, "movies": MOVIE, "anime": ANIME}
+TYPE_TO_SECTION = {TV: "tv", MOVIE: "movies", ANIME: "anime"}
 LIBRARY_ENDPOINTS = {"tv": "shows", "movies": "movies", "anime": "anime"}
 LIBRARY_MAX_AGE = 24 * 3600
+
+# how many already-tracked titles we are willing to look up genres for when
+# seeding a taste profile from scratch
+MAX_LIBRARY_SEED = 150
 
 SUGGESTED_GENRES = [
     "action", "adventure", "animation", "comedy", "crime", "documentary",
@@ -27,7 +45,7 @@ SUGGESTED_GENRES = [
 ]
 
 MENU_HELP = """
-    y  yes, I watched it        n  no / skip
+    y  yes, I watched it        n  no / skip (remembered, never asked again)
     s  skip the rest of this genre
     b  back to the previous title
     q  stop discovery and keep what I have queued so far
@@ -35,21 +53,6 @@ MENU_HELP = """
 
 
 # --------------------------------------------------------------------- helpers
-
-
-def collect_simkl_ids(payload: Any, found: Optional[Set[str]] = None) -> Set[str]:
-    """Walk an arbitrary sync response and pull out every simkl id it mentions."""
-    found = found if found is not None else set()
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if key in ("simkl", "simkl_id") and isinstance(value, (int, str)):
-                found.add(str(value))
-            else:
-                collect_simkl_ids(value, found)
-    elif isinstance(payload, list):
-        for entry in payload:
-            collect_simkl_ids(entry, found)
-    return found
 
 
 def ask(prompt: str, default: str = "") -> str:
@@ -73,41 +76,57 @@ def candidate_to_item(candidate: Dict[str, Any], media_type: str) -> Optional[Wa
         media_type=media_type,
         year=candidate.get("year"),
         ids=ids,
+        poster=str(candidate.get("poster") or ""),
+        genres=candidate_genres(candidate),
         source="discovery",
     )
 
 
-def format_candidate(candidate: Dict[str, Any]) -> str:
-    bits = []
-    genres = candidate.get("genres")
-    if isinstance(genres, list) and genres:
-        bits.append(", ".join(str(g) for g in genres[:3]))
+def detail_lines(candidate: Dict[str, Any], item: WatchItem, match: Optional[float], genre: str) -> List[str]:
+    lines = [f"\033[1m{item.label()}\033[0m"]
+
+    genres = candidate_genres(candidate)
+    if genres:
+        lines.append(", ".join(g.title() for g in genres[:4]))
+
     ratings = candidate.get("ratings") or {}
+    bits = []
     simkl_rating = (ratings.get("simkl") or {}).get("rating")
     imdb_rating = (ratings.get("imdb") or {}).get("rating")
     if simkl_rating:
         bits.append(f"Simkl {simkl_rating}")
     if imdb_rating:
         bits.append(f"IMDb {imdb_rating}")
-    return f"  ({' | '.join(bits)})" if bits else ""
+    if bits:
+        lines.append("  ".join(bits))
+
+    if match is not None:
+        filled = int(round(match / 10))
+        bar = "█" * filled + "░" * (10 - filled)
+        lines.append(f"{bar} {match:.0f}% match")
+
+    lines.append(f"from: {genre}")
+    return lines
 
 
 # -------------------------------------------------------------------- library
 
 
-def load_library_ids(client: SimklClient, store: Store, sections: Iterable[str], refresh: bool = False) -> Set[str]:
-    """Simkl IDs already in the account, so we do not ask about them again.
+def load_library_map(
+    client: SimklClient, store: Store, sections: Iterable[str], refresh: bool = False
+) -> Dict[str, str]:
+    """Simkl ID -> media type for everything already on the account.
 
-    Cached for a day. Per Simkl's sync rules the three types are fetched
-    sequentially (never in parallel) and with the smallest possible payload.
+    Cached for a day. Per Simkl's sync rules the types are fetched sequentially
+    (never in parallel) with the smallest payload the API offers.
     """
     cached = store.load_library()
     fresh = cached and (time.time() - float(cached.get("fetched_at", 0)) < LIBRARY_MAX_AGE)
-    if fresh and not refresh:
-        print(f"  Using cached library ({len(cached.get('ids', []))} items already tracked).")
-        return set(cached.get("ids", []))
+    if fresh and not refresh and isinstance(cached.get("items"), dict):
+        print(f"  Using cached library ({len(cached['items'])} items already tracked).")
+        return dict(cached["items"])
 
-    ids: Set[str] = set()
+    items: Dict[str, str] = {}
     print("  Fetching your existing Simkl library so we skip what you already track...")
     for section in sections:
         endpoint = LIBRARY_ENDPOINTS.get(section)
@@ -119,12 +138,28 @@ def load_library_ids(client: SimklClient, store: Store, sections: Iterable[str],
         except SimklError as exc:
             print(f"skipped ({exc})")
             continue
-        section_ids = collect_simkl_ids(payload)
-        ids |= section_ids
-        print(f"{len(section_ids)} item(s)")
+        found = _extract_ids(payload)
+        for simkl_id in found:
+            items[simkl_id] = SECTION_TO_TYPE.get(section, TV)
+        print(f"{len(found)} item(s)")
 
-    store.save_library({"fetched_at": time.time(), "ids": sorted(ids)})
-    return ids
+    store.save_library({"fetched_at": time.time(), "items": items})
+    return items
+
+
+def _extract_ids(payload: Any, found: Optional[Set[str]] = None) -> Set[str]:
+    """Walk an arbitrary sync response and pull out every simkl id it mentions."""
+    found = found if found is not None else set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in ("simkl", "simkl_id") and isinstance(value, (int, str)):
+                found.add(str(value))
+            else:
+                _extract_ids(value, found)
+    elif isinstance(payload, list):
+        for entry in payload:
+            _extract_ids(entry, found)
+    return found
 
 
 # ------------------------------------------------------------------ candidates
@@ -151,8 +186,8 @@ def seed_from_favourites(client: SimklClient, titles: List[str]) -> Dict[str, An
             continue
         candidate, media_type = found
         hits.append({"candidate": candidate, "media_type": media_type})
-        for genre in candidate.get("genres") or []:
-            slug = str(genre).strip().lower().replace(" ", "-")
+        for genre in candidate_genres(candidate):
+            slug = genre.replace(" ", "-")
             if slug:
                 genres.add(slug)
         print(f"{candidate.get('title')} ({candidate.get('year')})")
@@ -165,9 +200,10 @@ def gather_candidates(
     genres: List[str],
     per_genre: int,
     sort: str = "popular-this-month",
+    seen: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Pull popular titles per genre per section, de-duplicated by simkl id."""
-    seen: Set[str] = set()
+    seen = seen if seen is not None else set()
     gathered: List[Dict[str, Any]] = []
 
     for section in sections:
@@ -180,8 +216,7 @@ def gather_candidates(
                 continue
             kept = 0
             for candidate in results:
-                ids = candidate_ids(candidate)
-                simkl_id = str(ids.get("simkl") or "")
+                simkl_id = str(candidate_ids(candidate).get("simkl") or "")
                 if not simkl_id or simkl_id in seen:
                     continue
                 seen.add(simkl_id)
@@ -200,8 +235,7 @@ def add_trending(client: SimklClient, sections: List[str], seen: Set[str], limit
         results = client.trending(section, "month")
         kept = 0
         for candidate in results[:limit]:
-            ids = candidate_ids(candidate)
-            simkl_id = str(ids.get("simkl") or "")
+            simkl_id = str(candidate_ids(candidate).get("simkl") or "")
             if not simkl_id or simkl_id in seen:
                 continue
             seen.add(simkl_id)
@@ -209,6 +243,51 @@ def add_trending(client: SimklClient, sections: List[str], seen: Set[str], limit
             kept += 1
         print(f"{kept} new")
     return gathered
+
+
+# ----------------------------------------------------------------- taste seed
+
+
+def build_taste_profile(
+    client: SimklClient,
+    store: Store,
+    queue: List[WatchItem],
+    library: Dict[str, str],
+    enabled: bool = True,
+) -> TasteProfile:
+    """Learn from the current queue, everything accepted before, and rejections."""
+    if not enabled:
+        return TasteProfile()
+
+    lookup = GenreLookup(client, store)
+
+    accepted = [WatchItem.from_dict(raw) for raw in store.load_accepted()]
+    known = {item.dedupe_key() for item in accepted}
+    for item in queue:
+        if item.dedupe_key() not in known:
+            accepted.append(item)
+            known.add(item.dedupe_key())
+
+    # first run after an import: nothing recorded locally, but the account
+    # itself is evidence of taste
+    if not accepted and library:
+        seed_ids = list(library.items())[:MAX_LIBRARY_SEED]
+        uncached = [i for i, _ in seed_ids if i not in lookup.cache]
+        if uncached:
+            print(f"  Learning your taste from {len(seed_ids)} title(s) already on your account...")
+        for simkl_id, media_type in seed_ids:
+            genres = lookup.get(simkl_id, media_type)
+            if genres:
+                accepted.append(WatchItem(title=simkl_id, media_type=media_type, genres=genres))
+
+    lookup.enrich(accepted)
+
+    rejected = store.load_rejected()
+    rejected_genres = [entry.get("genres", []) for entry in rejected.values() if isinstance(entry, dict)]
+
+    profile = build_profile(accepted, rejected_genres)
+    print(profile.summary())
+    return profile
 
 
 # ----------------------------------------------------------------- the prompt
@@ -238,14 +317,19 @@ def run_discovery(
     store: Store,
     existing: Optional[List[WatchItem]] = None,
     refresh_library: bool = False,
+    renderer: Optional[PosterRenderer] = None,
+    use_taste: bool = True,
 ) -> List[WatchItem]:
     """Interactive session. Returns the queue of confirmed watched items."""
     queue: List[WatchItem] = list(existing or [])
     queued_keys: Set[Any] = {item.dedupe_key() for item in queue}
+    rejected: Dict[str, Any] = store.load_rejected()
 
     print("\n" + "=" * 60)
     print("Discovery mode - let's work out what you have watched")
     print("=" * 60)
+    if renderer and not renderer.enabled and renderer.reason:
+        print(f"  (posters off: {renderer.reason})")
 
     print("\nWhich do you want to go through?")
     print("  1) TV shows   2) Movies   3) Anime   4) all of them")
@@ -257,8 +341,14 @@ def run_discovery(
         "4": ["tv", "movies", "anime"],
     }.get(choice, ["tv", "movies", "anime"])
 
+    library = load_library_map(client, store, sections, refresh=refresh_library)
+    profile = build_taste_profile(client, store, queue, library, enabled=use_taste)
+
+    suggested = profile.top_genres(6)
+    if suggested:
+        print(f"\n  Suggested genres based on that: {', '.join(suggested)}")
+
     print("\nFavourite shows or movies (comma separated, blank to skip).")
-    print("  These get offered first and are used to guess your genres.")
     favourites = parse_list(ask("  > "))
 
     seed_genres: List[str] = []
@@ -267,52 +357,72 @@ def run_discovery(
         seeds = seed_from_favourites(client, favourites)
         seed_genres = seeds["genres"]
         favourite_hits = seeds["hits"]
-        if seed_genres:
-            print(f"  Genres picked up from your favourites: {', '.join(seed_genres[:8])}")
 
-    print("\nGenres to browse (comma separated). Blank uses the ones above,")
+    default_genres = seed_genres or suggested or ["all"]
+    print(f"\nGenres to browse - blank accepts: {', '.join(default_genres)}")
     print(f"  or pick from: {', '.join(SUGGESTED_GENRES)}")
-    genres = parse_list(ask("  > ")) or seed_genres or ["all"]
+    genres = parse_list(ask("  > ")) or default_genres
     genres = [genre.lower().replace(" ", "-") for genre in genres]
 
-    per_genre = ask("\nHow many titles per genre? [20]: ", "20")
+    raw_per_genre = ask("\nHow many titles per genre? [20]: ", "20")
     try:
-        per_genre = max(1, min(50, int(per_genre)))
+        per_genre = max(1, min(50, int(raw_per_genre)))
     except ValueError:
         per_genre = 20
 
-    library = load_library_ids(client, store, sections, refresh=refresh_library)
-
     print("\n  Building the candidate list...")
+    seen_ids: Set[str] = set()
     entries: List[Dict[str, Any]] = []
     for hit in favourite_hits:
-        entries.append({"candidate": hit["candidate"], "section": "favourites", "genre": "favourites"})
-    entries.extend(gather_candidates(client, sections, genres, per_genre))
+        simkl_id = str(candidate_ids(hit["candidate"]).get("simkl") or "")
+        if simkl_id and simkl_id not in seen_ids:
+            seen_ids.add(simkl_id)
+            entries.append(
+                {
+                    "candidate": hit["candidate"],
+                    "section": TYPE_TO_SECTION.get(hit["media_type"], "tv"),
+                    "genre": "favourites",
+                }
+            )
+    entries.extend(gather_candidates(client, sections, genres, per_genre, seen=seen_ids))
 
-    seen_ids = {str(candidate_ids(entry["candidate"]).get("simkl")) for entry in entries}
     if ask("\n  Also include Simkl Trending titles? [y/N]: ").lower().startswith("y"):
         entries.extend(add_trending(client, sections, seen_ids))
 
-    # drop things already tracked on the account or already queued
+    # drop anything already tracked, already queued, or previously rejected
     filtered: List[Dict[str, Any]] = []
-    already = 0
+    in_library = skipped_before = 0
     for entry in entries:
         simkl_id = str(candidate_ids(entry["candidate"]).get("simkl") or "")
         if simkl_id and simkl_id in library:
-            already += 1
+            in_library += 1
+            continue
+        if simkl_id and simkl_id in rejected:
+            skipped_before += 1
+            continue
+        item = candidate_to_item(entry["candidate"], SECTION_TO_TYPE.get(entry["section"], TV))
+        if item is None or item.dedupe_key() in queued_keys:
             continue
         filtered.append(entry)
 
-    print(f"\n  {len(filtered)} title(s) to go through ({already} already in your Simkl library, skipped).")
-    if not filtered:
+    ranked = rank_entries(filtered, profile)
+
+    print(
+        f"\n  {len(ranked)} title(s) to go through "
+        f"({in_library} already on your account, {skipped_before} you already said no to)."
+    )
+    if not ranked:
+        print("  Nothing new to ask about - try more genres, or a larger count per genre.")
         return queue
+    if not profile.empty:
+        print("  Ordered best-match first based on what you have already accepted.")
     print(MENU_HELP)
 
     index = 0
     skip_genre: Optional[str] = None
     added = 0
-    while index < len(filtered):
-        entry = filtered[index]
+    while index < len(ranked):
+        entry, match = ranked[index]
         candidate, section, genre = entry["candidate"], entry["section"], entry["genre"]
 
         if skip_genre is not None and genre == skip_genre:
@@ -320,17 +430,20 @@ def run_discovery(
             continue
         skip_genre = None
 
-        media_type = SECTION_TO_TYPE.get(section, TV)
-        item = candidate_to_item(candidate, media_type)
-        if item is None:
-            index += 1
-            continue
-        if item.dedupe_key() in queued_keys:
+        item = candidate_to_item(candidate, SECTION_TO_TYPE.get(section, TV))
+        if item is None or item.dedupe_key() in queued_keys:
             index += 1
             continue
 
-        counter = f"[{index + 1}/{len(filtered)}]"
-        print(f"{counter} {item.label()}{format_candidate(candidate)}   <{genre}>")
+        counter = f"[{index + 1}/{len(ranked)}]"
+        lines = detail_lines(candidate, item, match if not profile.empty else None, genre)
+        lines.insert(0, counter)
+        print()
+        if renderer:
+            print(renderer.render_beside(item.poster, lines))
+        else:
+            print("\n".join(lines))
+
         answer = ask("      Watched it? [y/N/s/b/q]: ", "n").lower()
 
         if answer.startswith("q"):
@@ -350,7 +463,27 @@ def run_discovery(
                 queued_keys.add(item.dedupe_key())
                 added += 1
                 store.save_queue([queued.to_dict() for queued in queue])
+                _remember_accepted(store, item)
+        else:
+            simkl_id = str(item.ids.get("simkl") or "")
+            if simkl_id:
+                rejected[simkl_id] = {"title": item.title, "genres": item.genres}
+                store.save_rejected(rejected)
         index += 1
 
     print(f"\n  Discovery done: {added} title(s) added, {len(queue)} in the queue overall.")
     return queue
+
+
+def _remember_accepted(store: Store, item: WatchItem) -> None:
+    """Keep accepted titles for taste, separately from the queue.
+
+    The queue is emptied once it has been sent; this list is what makes the
+    next round smarter, so it outlives it.
+    """
+    accepted = store.load_accepted()
+    key = str(item.ids.get("simkl") or item.title)
+    if any(str(raw.get("ids", {}).get("simkl") or raw.get("title")) == key for raw in accepted):
+        return
+    accepted.append(item.to_dict())
+    store.save_accepted(accepted)

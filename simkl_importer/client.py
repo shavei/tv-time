@@ -237,6 +237,11 @@ class SimklClient:
         )
         return result if isinstance(result, list) else []
 
+    def summary(self, section: str, simkl_id: str) -> dict:
+        """Detail for one title - used to learn genres. section: tv/movies/anime."""
+        result = self.get(f"/{section}/{simkl_id}", params={"extended": "full"})
+        return result if isinstance(result, dict) else {}
+
     def trending(self, section: str, timeframe: str = "month") -> list:
         """Pre-built trending files on the Simkl CDN (no API key, no quota)."""
         url = f"https://data.simkl.in/discover/trending/{section}/{timeframe}_100.json"

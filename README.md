@@ -11,8 +11,10 @@ Two ways to get your history in, and they share the same import pipeline:
    it: later rounds are ordered best-match first and never re-ask about
    something you passed on.
 
-Both feed a local queue which is then pushed to `POST /sync/history` in batches,
-with rate limiting, retries and a report of anything that could not be matched.
+Both feed a local queue which is then pushed to Simkl in batches — watched
+titles to `POST /sync/history`, ones you only want to *watch later* to
+`POST /sync/add-to-list` — with rate limiting, retries and a report of anything
+that could not be matched.
 
 ---
 
@@ -69,6 +71,7 @@ CSV or JSON. Column names are matched loosely, so most exports work as-is:
 | season | `season`, `season_number`, `s` |
 | episode | `episode`, `episode_number`, `ep`, `e` |
 | watched date | `watched_at`, `date_watched`, `last_watched`, `created_at` |
+| status | `status`, `watchlist` — `plantowatch` / `watch later` queues instead of marking watched |
 | ids | `imdb_id`, `tmdb_id`, `tvdb_id`, `simkl_id`, `mal_id`, `anidb_id` |
 | rating | `rating`, `score`, `my_rating` |
 
@@ -82,6 +85,8 @@ See [`sample_data/`](sample_data/) for working examples. Notes:
 * Titles like `The Wire - S02E05` are parsed if there are no season/episode
   columns.
 * An `imdb_id` skips the search step entirely, which is faster and more accurate.
+* A `status` of `plantowatch`, `watchlist`, `watch later` or similar sends the
+  row to Plan to Watch rather than marking it watched.
 
 ## Discovery mode
 
@@ -116,6 +121,27 @@ Three screens:
    Watched none of them? The button says **None of these** — that is a real
    answer. All of them are recorded as declined, so the next run offers
    something different instead of the same wall.
+
+### Watched it, or want to watch it
+
+Each poster cycles through three states as you click it:
+
+| Clicks | State | Where it goes |
+|---|---|---|
+| once | **watched** (teal) | `POST /sync/history` — you say how much on the next screen |
+| twice | **want to watch** (amber) | `POST /sync/add-to-list` with `"to": "plantowatch"` |
+| three times | back to unselected | recorded as declined |
+
+Plan-to-watch titles skip the "how much did you watch?" screen entirely —
+there is nothing to answer. The terminal reports the two groups separately:
+
+```
+Ready to send: 14 title(s)
+  as watched      : 9 - 3 movie(s), 6 show(s), 41 explicit episode(s)
+  to Plan to Watch: 5
+```
+
+In `--tui` mode the same choice is the `l` answer at the prompt.
 
 ### Era and order
 
@@ -245,7 +271,8 @@ The Simkl developer rules are enforced client-side:
   server-side limit. `--daily-limit 0` disables the guard if your app has been
   approved for more.
 * Items are sent **in batches** (`--batch-size`, default 50 titles per POST), so
-  a 2,000-title import is ~40 requests, not 2,000.
+  a 2,000-title import is ~40 requests, not 2,000. Watched titles and
+  plan-to-watch titles are batched separately, into their own endpoints.
 * Library reads use `/sync/all-items/{type}?extended=simkl_ids_only`, fetched
   sequentially and cached for 24h (`--refresh-library` to force).
 
@@ -322,6 +349,6 @@ simkl_importer/
   taste.py       taste profile from your answers, and candidate ranking
   images.py      poster thumbnails as terminal colour blocks (--tui)
   progress.py    "s1, s2e1-4" -> seasons/episodes
-  sync.py        batching, POST /sync/history, reporting
+  sync.py        batching, POST /sync/history and /sync/add-to-list, reporting
   models.py      WatchItem and the Simkl payload shapes
 ```

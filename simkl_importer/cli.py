@@ -15,7 +15,7 @@ from .images import DEFAULT_WIDTH, PosterRenderer
 from .matching import Matcher
 from .models import WatchItem
 from .parsers import ParseError, load_file
-from .sync import DEFAULT_BATCH_SIZE, push_history, write_unmatched_csv
+from .sync import DEFAULT_BATCH_SIZE, push_queue, split_by_intent, write_unmatched_csv
 from .web import run_web_discovery
 
 BANNER = r"""
@@ -232,11 +232,16 @@ def action_send(args, client: SimklClient, store: Store, queue: List[WatchItem])
         print("\n  The queue is empty - import a file or run discovery first.")
         return queue
 
-    movies = sum(1 for item in queue if item.is_movie)
-    episodes = sum(len(season.episodes) for item in queue for season in item.seasons.values())
+    watched, planned = split_by_intent(queue)
+    movies = sum(1 for item in watched if item.is_movie)
+    episodes = sum(len(season.episodes) for item in watched for season in item.seasons.values())
     print("\n" + "-" * 60)
-    print(f"Ready to send: {len(queue)} title(s) - {movies} movie(s), "
-          f"{len(queue) - movies} show(s), {episodes} explicit episode(s)")
+    print(f"Ready to send: {len(queue)} title(s)")
+    if watched:
+        print(f"  as watched      : {len(watched)} - {movies} movie(s), "
+              f"{len(watched) - movies} show(s), {episodes} explicit episode(s)")
+    if planned:
+        print(f"  to Plan to Watch: {len(planned)}")
     print("-" * 60)
     for item in queue[:10]:
         print(f"  {item.label():<42.42} {item.describe_progress()}")
@@ -249,7 +254,7 @@ def action_send(args, client: SimklClient, store: Store, queue: List[WatchItem])
             print("  Cancelled; the queue is still saved.")
             return queue
 
-    report = push_history(client, queue, batch_size=args.batch_size, dry_run=args.dry_run)
+    report = push_queue(client, queue, batch_size=args.batch_size, dry_run=args.dry_run)
     print(report.summary())
 
     if args.dry_run:

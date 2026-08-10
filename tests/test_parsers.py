@@ -201,3 +201,89 @@ def test_roundtrip_serialisation():
 
     restored = WatchItem.from_dict(item.to_dict())
     assert restored.to_payload() == item.to_payload()
+
+
+# ------------------------------------------------------------- plan to watch
+
+
+def test_plan_items_render_the_add_to_list_shape():
+    from simkl_importer.models import PLAN
+
+    item = WatchItem(title="Dune", media_type=MOVIE, year=2021,
+                     ids={"simkl": 1, "imdb": "tt1160419"}, intent=PLAN)
+    payload = item.to_list_payload()
+
+    assert payload == {
+        "title": "Dune",
+        "to": "plantowatch",
+        "year": 2021,
+        "ids": {"simkl": 1, "imdb": "tt1160419"},
+    }
+    assert item.describe_progress() == "plan to watch"
+
+
+def test_intent_survives_a_round_trip_through_the_queue():
+    from simkl_importer.models import PLAN
+
+    item = WatchItem(title="Dune", ids={"simkl": 1}, intent=PLAN)
+    assert WatchItem.from_dict(item.to_dict()).is_plan
+
+
+def test_unknown_intent_falls_back_to_watched():
+    restored = WatchItem.from_dict({"title": "X", "intent": "nonsense"})
+    assert restored.is_plan is False
+
+
+def test_merging_a_watched_record_over_a_planned_one_wins():
+    from simkl_importer.models import PLAN, WATCHED
+
+    planned = WatchItem(title="Dune", ids={"simkl": 1}, intent=PLAN)
+    planned.merge(WatchItem(title="Dune", ids={"simkl": 1}, intent=WATCHED))
+    assert planned.is_plan is False
+
+
+def test_queue_splits_by_intent():
+    from simkl_importer.models import PLAN
+    from simkl_importer.sync import split_by_intent
+
+    items = [
+        WatchItem(title="Seen It", ids={"simkl": 1}),
+        WatchItem(title="Later", ids={"simkl": 2}, intent=PLAN),
+        WatchItem(title="Also Seen", ids={"simkl": 3}),
+    ]
+    watched, planned = split_by_intent(items)
+
+    assert [i.title for i in watched] == ["Seen It", "Also Seen"]
+    assert [i.title for i in planned] == ["Later"]
+
+
+def test_list_batches_use_the_add_to_list_shape():
+    from simkl_importer.models import PLAN
+    from simkl_importer.sync import build_batches
+
+    items = [
+        WatchItem(title="Later Show", ids={"simkl": 1}, intent=PLAN),
+        WatchItem(title="Later Film", media_type=MOVIE, ids={"simkl": 2}, intent=PLAN),
+    ]
+    batch = build_batches(items, batch_size=50, for_list=True)[0]
+
+    assert batch["shows"][0]["to"] == "plantowatch"
+    assert batch["movies"][0]["to"] == "plantowatch"
+    assert "seasons" not in batch["shows"][0] and "status" not in batch["shows"][0]
+
+
+def test_a_plan_to_watch_status_column_queues_rather_than_marks_watched():
+    from simkl_importer.parsers import normalize_row, map_headers, row_to_item
+
+    for label in ("plantowatch", "plan to watch", "watchlist", "watch later"):
+        raw = {"title": "Dune", "year": "2021", "type": "movie", "status": label}
+        item = row_to_item(normalize_row(raw, map_headers(raw.keys())))
+        assert item.is_plan, label
+        assert item.to_list_payload()["to"] == "plantowatch"
+
+
+def test_an_ordinary_status_still_means_watched():
+    from simkl_importer.parsers import normalize_row, map_headers, row_to_item
+
+    raw = {"title": "Dune", "year": "2021", "type": "movie", "status": "completed"}
+    assert row_to_item(normalize_row(raw, map_headers(raw.keys()))).is_plan is False

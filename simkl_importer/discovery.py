@@ -19,7 +19,7 @@ from .client import SimklClient, SimklError
 from .config import Store
 from .images import PosterRenderer
 from .matching import candidate_ids
-from .models import ANIME, MOVIE, TV, WatchItem
+from .models import ANIME, MOVIE, PLAN, TV, WatchItem
 from .progress import ProgressError, apply_progress, parse_progress
 from .taste import (
     GenreLookup,
@@ -61,6 +61,7 @@ ERA_CHOICES = [
 
 MENU_HELP = """
     y  yes, I watched it        n  no / skip (remembered, never asked again)
+    l  not yet - add it to Plan to Watch
     s  skip the rest of this genre
     b  back to the previous title
     q  stop discovery and keep what I have queued so far
@@ -583,7 +584,7 @@ def run_discovery(
         else:
             print("\n".join(lines))
 
-        answer = ask("      Watched it? [y/N/s/b/q]: ", "n").lower()
+        answer = ask("      Watched it? [y/N/l/s/b/q]: ", "n").lower()
 
         if answer.startswith("q"):
             print("\n  Stopping discovery.")
@@ -594,6 +595,16 @@ def run_discovery(
         if answer.startswith("s"):
             skip_genre = genre
             print(f"      Skipping the rest of '{genre}'.")
+            index += 1
+            continue
+        if answer.startswith("l"):
+            item.intent = PLAN
+            queue.append(item)
+            queued_keys.add(item.dedupe_key())
+            added += 1
+            store.save_queue([queued.to_dict() for queued in queue])
+            _remember_accepted(store, item)
+            print("      queued: plan to watch")
             index += 1
             continue
         if answer.startswith("y"):

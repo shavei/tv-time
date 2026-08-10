@@ -276,3 +276,8 @@ class SimklClient:
     def add_to_history(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = self.post("/sync/history", payload=payload, authenticated=True)
         return result if isinstance(result, dict) else {}
+
+    def add_to_list(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Park items on a watchlist without marking anything watched."""
+        result = self.post("/sync/add-to-list", payload=payload, authenticated=True)
+        return result if isinstance(result, dict) else {}

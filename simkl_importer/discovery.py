@@ -42,6 +42,10 @@ MAX_LIBRARY_SEED = 150
 MAX_PAGES = 8
 # how many unanswered candidates a taste-driven run aims to put in front of you
 DEFAULT_TARGET = 100
+# ...and how many it looks at to choose them from. Showing the best 100 of 400
+# is a very different list from the first 100 that happened to turn up.
+POOL_FACTOR = 4
+MAX_POOL = 600
 
 SUGGESTED_GENRES = [
     "action", "adventure", "animation", "comedy", "crime", "documentary",
@@ -425,6 +429,11 @@ def build_session(
 
     chosen = genres or seed_genres or prepared.get("suggested") or ["all"]
     chosen = [genre.lower().replace(" ", "-") for genre in chosen]
+    if target:
+        # Depth to choose from: your strongest genres stay at the front, so the
+        # pool is weighted towards them, but the pager has somewhere to go once
+        # those are exhausted.
+        chosen = chosen + [g for g in SUGGESTED_GENRES if g not in chosen]
     per_genre = max(1, min(50, int(per_genre or 20)))
 
     log("  Building the candidate list...")
@@ -448,12 +457,16 @@ def build_session(
         if item.ids.get("simkl"):
             answered_ids.add(str(item.ids["simkl"]))
 
+    # Look at several times what we will show, so the shortlist is genuinely
+    # the closest matches rather than the first arrivals.
+    pool_target = min(MAX_POOL, target * POOL_FACTOR) if target else None
     if target:
-        log(f"  Looking for {target} title(s) you have not answered yet...")
+        log(f"  Looking at up to {pool_target} unanswered title(s) "
+            f"to pick the {target} closest to your taste...")
     entries.extend(
         gather_candidates(
             client, sections, chosen, per_genre, sort=sort, year=year,
-            seen=seen_ids, exclude=answered_ids, target=target, log=log,
+            seen=seen_ids, exclude=answered_ids, target=pool_target, log=log,
         )
     )
 
@@ -485,6 +498,14 @@ def build_session(
         filtered.append(entry)
 
     ranked = rank_entries(filtered, profile)
+
+    examined = len(ranked)
+    if target and examined > target:
+        # ranked is best-first, so the shortlist is simply the head of it
+        ranked = ranked[:target]
+        best, worst = ranked[0][1], ranked[-1][1]
+        log(f"  Looked at {examined}, showing the {len(ranked)} closest to your taste"
+            + (f" ({worst:.0f}-{best:.0f}% match)." if not profile.empty else "."))
 
     reasons = []
     if in_library:

@@ -354,3 +354,105 @@ def test_pages_sweep_all_genres_before_going_deeper():
 
     first_pass = [genre for _, genre, page in client.calls if page == 1]
     assert first_pass == ["drama", "crime", "comedy"]
+
+
+# ------------------------------------------------------- shortlisting by match
+
+
+def test_the_shortlist_is_the_best_matches_not_the_first_arrivals(monkeypatch, tmp_path):
+    """400 examined, 100 shown - and the 100 must be the closest ones."""
+    from simkl_importer.config import Store
+    from simkl_importer.models import WatchItem
+    import simkl_importer.discovery as discovery
+
+    # a pool where only the later-paged titles match the profile
+    def fake_gather(client, sections, genres, per_genre, **kwargs):
+        out = []
+        for n in range(40):
+            genre = "crime" if n >= 30 else "romance"   # the good ones arrive last
+            out.append({
+                "candidate": {"title": f"T{n}", "year": 2015, "genres": [genre.title()],
+                              "ids": {"simkl_id": n}},
+                "section": "tv", "genre": genre,
+            })
+        return out
+
+    monkeypatch.setattr(discovery, "gather_candidates", fake_gather)
+    store = Store(tmp_path / "home")
+    prepared = {
+        "library": {},
+        "profile": discovery.build_profile([WatchItem(title="seed", genres=["crime"])]),
+        "suggested": ["crime"],
+    }
+    data = discovery.build_session(
+        None, store, [], prepared, sections=["tv"], per_genre=10, target=10,
+        log=lambda *_: None,
+    )
+
+    assert len(data["ranked"]) == 10
+    shown = [e["candidate"]["title"] for e, _ in data["ranked"]]
+    # the crime ones are T30..T39 - all ten must have made the cut
+    assert set(shown) == {f"T{n}" for n in range(30, 40)}
+    assert all(score >= 50 for _, score in data["ranked"])
+
+
+def test_no_target_shows_everything_found(monkeypatch, tmp_path):
+    from simkl_importer.config import Store
+    import simkl_importer.discovery as discovery
+
+    def fake_gather(client, sections, genres, per_genre, **kwargs):
+        return [{"candidate": {"title": f"T{n}", "year": 2015, "genres": ["Drama"],
+                               "ids": {"simkl_id": n}}, "section": "tv", "genre": "drama"}
+                for n in range(1, 26)]
+
+    monkeypatch.setattr(discovery, "gather_candidates", fake_gather)
+    data = discovery.build_session(
+        None, Store(tmp_path / "home"), [],
+        {"library": {}, "profile": discovery.TasteProfile(), "suggested": []},
+        sections=["tv"], per_genre=10, log=lambda *_: None,
+    )
+    assert len(data["ranked"]) == 25  # the grid is not shortlisted
+
+
+def test_the_pool_is_bigger_than_what_gets_shown(monkeypatch, tmp_path):
+    """The gatherer must be asked for several times the target."""
+    from simkl_importer.config import Store
+    import simkl_importer.discovery as discovery
+
+    asked = {}
+
+    def fake_gather(client, sections, genres, per_genre, **kwargs):
+        asked["target"] = kwargs.get("target")
+        asked["genres"] = list(genres)
+        return []
+
+    monkeypatch.setattr(discovery, "gather_candidates", fake_gather)
+    discovery.build_session(
+        None, Store(tmp_path / "home"), [],
+        {"library": {}, "profile": discovery.TasteProfile(), "suggested": ["crime"]},
+        sections=["tv"], per_genre=10, target=100, log=lambda *_: None,
+    )
+
+    assert asked["target"] == 100 * discovery.POOL_FACTOR
+    # strongest genre stays first, the rest are there to page through
+    assert asked["genres"][0] == "crime"
+    assert len(asked["genres"]) > 1
+
+
+def test_the_pool_is_capped(monkeypatch, tmp_path):
+    from simkl_importer.config import Store
+    import simkl_importer.discovery as discovery
+
+    asked = {}
+
+    def fake_gather(client, sections, genres, per_genre, **kwargs):
+        asked["target"] = kwargs.get("target")
+        return []
+
+    monkeypatch.setattr(discovery, "gather_candidates", fake_gather)
+    discovery.build_session(
+        None, Store(tmp_path / "home"), [],
+        {"library": {}, "profile": discovery.TasteProfile(), "suggested": []},
+        sections=["tv"], per_genre=10, target=1000, log=lambda *_: None,
+    )
+    assert asked["target"] == discovery.MAX_POOL

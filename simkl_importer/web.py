@@ -163,7 +163,7 @@ class WebFlow:
     """Drives setup -> build -> pick, with the browser polling for progress."""
 
     def __init__(self, client, store, queue, refresh_library=False, use_taste=True,
-                 mode="grid"):
+                 mode="grid", target=None):
         self.client = client
         self.store = store
         self.queue = queue
@@ -172,6 +172,8 @@ class WebFlow:
         # "grid" asks you to configure a sweep; "foryou" skips straight to
         # titles picked from your profile, one at a time
         self.mode = mode
+        # how many unanswered titles a For You run aims to find
+        self.target = target
 
         self.token = secrets.token_urlsafe(24)
         self.finished = threading.Event()
@@ -234,6 +236,7 @@ class WebFlow:
             "sorts": [{"value": v, "label": l} for v, l in SORT_CHOICES],
             "eras": [{"value": v, "label": l} for v, l in ERA_CHOICES],
             "mode": self.mode,
+            "target": self.target,
             "log": self.log_lines(),
         }
 
@@ -263,6 +266,7 @@ class WebFlow:
                 include_trending=bool(options.get("trending")),
                 sort=str(options.get("sort") or "rank"),
                 year=str(options.get("year") or "all-years"),
+                target=self.target if self.mode == "foryou" else None,
                 log=self.log,
             )
             self.session_data = data
@@ -383,11 +387,13 @@ def run_web_discovery(
     refresh_library: bool = False,
     use_taste: bool = True,
     mode: str = "grid",
+    target: Optional[int] = None,
 ) -> List[WatchItem]:
     """Serve the whole flow, block until the browser submits, return the queue."""
     from .discovery import _remember_accepted
 
-    flow = WebFlow(client, store, queue, refresh_library, use_taste, mode=mode)
+    flow = WebFlow(client, store, queue, refresh_library, use_taste,
+                   mode=mode, target=target)
     handler = type("BoundHandler", (Handler,), {"flow": flow})
     server = ThreadingHTTPServer((BIND_HOST, port), handler)
     url = f"http://{BIND_HOST}:{server.server_address[1]}/?token={flow.token}"
@@ -804,9 +810,11 @@ async function pollPrep() {
 
 async function startBuild() {
   const body = mode === 'foryou'
-    // empty genres means "use my taste profile", which the server resolves
+    // empty genres means "use my taste profile", which the server resolves;
+    // ranking still puts the closest matches first, so a wide sweep costs
+    // nothing in relevance and gives the pager room to find fresh titles
     ? { sections: ['tv', 'movies', 'anime'], genres: [], favourites: [],
-        per_genre: 40, trending: false, sort: 'rank', year: 'all-years' }
+        per_genre: 50, trending: false, sort: 'rank', year: 'all-years' }
     : {
         sections: Array.from(chosenSections),
         genres: Array.from(chosenGenres),

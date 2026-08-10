@@ -192,16 +192,16 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
     print("=" * 60)
 
     try:
-        session = collect_session(
-            client,
-            store,
-            queue,
-            refresh_library=args.refresh_library,
-            use_taste=not args.no_taste,
-        )
-        if not session["ranked"]:
-            return queue
         if args.tui:
+            session = collect_session(
+                client,
+                store,
+                queue,
+                refresh_library=args.refresh_library,
+                use_taste=not args.no_taste,
+            )
+            if not session["ranked"]:
+                return queue
             queue = run_discovery(
                 client,
                 store,
@@ -210,12 +210,16 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
                 session=session,
             )
         else:
+            # the browser asks the setup questions too, so nothing is
+            # answered here first
             queue = run_web_discovery(
-                session,
+                client,
                 store,
                 queue,
                 port=args.web_port,
                 open_browser=not args.no_browser,
+                refresh_library=args.refresh_library,
+                use_taste=not args.no_taste,
             )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")

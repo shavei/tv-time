@@ -85,49 +85,57 @@ See [`sample_data/`](sample_data/) for working examples. Notes:
 
 ## Discovery mode
 
-```
-Which do you want to go through?   1) TV  2) Movies  3) Anime  4) all
-Favourite shows or movies (comma separated, blank to skip).
-Genres to browse (comma separated).
-```
-
-Those four questions are asked in the terminal. Favourites are looked up to
-seed the genre list, then titles are pulled per genre (`/tv/genres/...`,
-`/movies/genres/...`, `/anime/genres/...`, sorted by `popular-this-month`),
-optionally topped up from Simkl Trending. Anything already on your account,
-already queued, or previously rejected is filtered out, and the rest is ranked
-against your taste profile.
-
-### The poster picker
-
-Then a page opens in your browser: a grid of real posters, best match first.
+`python -m simkl_importer --discover` opens your browser and everything happens
+there. The terminal prints the URL and then waits:
 
 ```
-  Poster picker is running in your browser.
-  http://127.0.0.1:51423/?token=l4FqNheoDu3Auw8ZX9oa4TebQNVqT0YA
+====================================================================
+  Opening in your browser. If nothing appeared, paste this in:
+
+    http://127.0.0.1:51423/?token=l4FqNheoDu3Auw8ZX9oa4TebQNVqT0YA
+
+====================================================================
 ```
 
-Click every title you've watched, filter by title or genre to find things, then
-**Continue** to say how much of each show you saw — `all` by default, or `s1`,
-`1-3`, `s2e5`, `s2e1-10`, or combinations like `s1, s2e1-4`. **Add to queue**
-hands it back to the terminal, which sends it to Simkl.
+Three screens:
 
-**No image is ever written to disk.** The `<img>` tags point straight at
-Simkl's `wsrv.nl` CDN, so your browser fetches the posters itself, at full
-quality, and its ordinary HTTP cache covers Simkl's "cache images by URL" rule.
-Nothing but JSON crosses the local server.
+1. **Setup** — what to browse (TV / movies / anime), favourite titles, genre
+   chips, how many per genre. Your Simkl account is read in the background
+   while you fill this in, so the genres you tend to watch come back
+   pre-selected.
+2. **Building** — a live log while candidates are gathered: titles are pulled
+   per genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`,
+   sorted by `popular-this-month`), optionally topped up from Simkl Trending,
+   then filtered and ranked against your taste profile.
+3. **Picking** — a grid of real posters, best match first. Click everything
+   you've watched, filter by title or genre to find things, then **Continue**
+   to say how much of each show you saw — `all` by default, or `s1`, `1-3`,
+   `s2e5`, `s2e1-10`, or combinations like `s1, s2e1-4`. **Add to queue** hands
+   it back to the terminal, which sends it to Simkl.
 
-The server binds `127.0.0.1` only, on a random free port, and every request
-needs the one-time token in the URL — plus the `Host` header must be loopback,
-so a web page you happen to have open cannot reach it. It shuts down as soon as
-you submit.
+If the browser does not open by itself, paste the printed URL — the script
+tries `webbrowser`, then the platform handler (`start` / `explorer` on Windows,
+`open` on macOS, `xdg-open` on Linux) and tells you which of the two happened.
+
+### No image is ever written to disk
+
+The `<img>` tags point straight at Simkl's `wsrv.nl` CDN, so your browser
+fetches the posters itself, at full quality, and its ordinary HTTP cache covers
+Simkl's "cache images by URL" rule. Nothing but JSON crosses the local server.
+
+### The local server
+
+It binds `127.0.0.1` only, on a random free port, and every request needs the
+one-time token in the URL — plus the `Host` header must be loopback, so a web
+page you happen to have open cannot reach it. Bodies are size-capped, and it
+shuts down as soon as you submit. Standard library only: no web framework.
 
 `--web-port N` pins the port, `--no-browser` just prints the URL.
 
-### Terminal fallback (`--tui`)
+### Terminal alternative (`--tui`)
 
-`--discover --tui` keeps the old one-at-a-time walkthrough, drawing posters as
-24-bit colour half-blocks:
+`--discover --tui` asks the setup questions in the terminal and keeps the
+one-at-a-time walkthrough, drawing posters as 24-bit colour half-blocks:
 
 ```
 ▄▄▄▄▄▄▄▄▄▄  [7/120]

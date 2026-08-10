@@ -456,3 +456,73 @@ def test_the_pool_is_capped(monkeypatch, tmp_path):
         sections=["tv"], per_genre=10, target=1000, log=lambda *_: None,
     )
     assert asked["target"] == discovery.MAX_POOL
+
+
+# ------------------------------------------------------- the match is absolute
+
+
+def test_a_title_sharing_nothing_with_you_scores_near_zero():
+    """The bug: min-max stretching made the least-bad candidate read 100%."""
+    from simkl_importer.taste import match_fraction
+
+    profile = build_profile([WatchItem(title="A", genres=["crime", "thriller"])])
+
+    assert match_fraction({"genres": ["Crime"]}, profile) == pytest.approx(1.0)
+    assert match_fraction({"genres": ["Romance"]}, profile) == pytest.approx(0.0)
+    assert match_fraction({"genres": ["Documentary", "Music"]}, profile) == pytest.approx(0.0)
+
+
+def test_a_pool_of_bad_matches_stays_a_pool_of_bad_matches():
+    """Ranking a poor pool must not promote its least-bad member to 100%."""
+    profile = build_profile([WatchItem(title="A", genres=["crime"])])
+    entries = [
+        entry("K-Drama Thing", ["Romance", "History"]),
+        entry("Docu Thing", ["Documentary"]),
+        entry("Music Thing", ["Music"]),
+    ]
+    ranked = rank_entries(entries, profile)
+
+    assert all(score == 0 for _, score in ranked), [s for _, s in ranked]
+
+
+def test_partial_overlap_lands_in_between():
+    from simkl_importer.taste import match_fraction
+
+    profile = build_profile([
+        WatchItem(title="A", genres=["crime"]),
+        WatchItem(title="B", genres=["crime"]),
+        WatchItem(title="C", genres=["comedy"]),
+    ])
+    both = match_fraction({"genres": ["Crime", "Romance"]}, profile)
+
+    assert 0 < both < 1
+    assert both < match_fraction({"genres": ["Crime"]}, profile)
+
+
+def test_match_is_unknown_rather_than_zero_when_there_is_nothing_to_go_on():
+    from simkl_importer.taste import match_fraction
+
+    profile = build_profile([WatchItem(title="A", genres=["crime"])])
+    assert match_fraction({"genres": []}, profile) is None
+    assert match_fraction({}, profile) is None
+    assert match_fraction({"genres": ["Crime"]}, TasteProfile()) is None
+
+
+def test_a_great_rating_cannot_outrank_actually_matching_you():
+    """8.5-rated romance must not beat a mediocre crime show for a crime fan."""
+    profile = build_profile([WatchItem(title="A", genres=["crime"])])
+    entries = [
+        entry("Beloved Romance", ["Romance"], rating=9.6),
+        entry("Middling Crime", ["Crime"], rating=6.1),
+    ]
+    ranked = rank_entries(entries, profile)
+
+    assert ranked[0][0]["candidate"]["title"] == "Middling Crime"
+
+
+def test_unknown_match_survives_the_payload():
+    from simkl_importer.web import candidate_payload
+
+    item = WatchItem(title="No Genres", ids={"simkl": 5})
+    blank = {"candidate": {"title": "No Genres", "ids": {"simkl_id": 5}}, "genre": "drama"}
+    assert candidate_payload(blank, None, item, True)["match"] is None

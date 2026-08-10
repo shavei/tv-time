@@ -693,3 +693,22 @@ def test_page_has_a_region_picker():
     assert "forYouCountries" in PAGE
     # "Anywhere" is the absence of a filter and must not coexist with one
     assert "chosenCountries.clear()" in PAGE
+
+
+def test_for_you_is_told_the_profile_and_the_sort(tmp_path):
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[],
+                   mode="foryou", sort="popular-this-month")
+    state = flow.prep_state()
+
+    assert state["picked_sort"] == "popular-this-month"
+    assert "summary" in state
+
+
+def test_the_for_you_screen_shows_what_it_learned():
+    from simkl_importer.web import PAGE
+
+    # a bad recommendation is unexplainable if you cannot see the profile
+    assert "oneProfileLine" in PAGE
+    assert "profileSummary" in PAGE
+    assert "No taste profile yet" in PAGE
+    assert "forYouSort" in PAGE

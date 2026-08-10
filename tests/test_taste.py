@@ -638,3 +638,72 @@ def test_no_country_means_no_filter():
     client = PagingClient(pages=2, per_page=5)
     gather_candidates(client, ["tv"], ["drama"], per_genre=5, log=lambda *_: None)
     assert client.countries == ["all-countries"]
+
+
+# --------------------------------------------------- every section gets a turn
+
+
+class SectionAwareClient:
+    """Plenty of rows per section, so one section could swamp a target."""
+
+    def __init__(self, per_page=50):
+        self.per_page = per_page
+        self.calls = []
+        self.next_id = 1
+
+    def genre_titles(self, section, genre="all", sort="rank", limit=20, page=1,
+                     year="all-years", country="all-countries"):
+        self.calls.append((section, genre, page))
+        out = []
+        for _ in range(self.per_page):
+            self.next_id += 1
+            out.append({"title": f"{section} {self.next_id}", "year": 2015,
+                        "genres": [genre.title()], "ids": {"simkl_id": self.next_id}})
+        return out
+
+
+def test_movies_are_reached_even_when_tv_could_fill_the_target():
+    """The bug: tv's genres filled the pool and /movies/ was never called."""
+    from simkl_importer.discovery import gather_candidates
+
+    client = SectionAwareClient(per_page=50)
+    got = gather_candidates(
+        client, ["tv", "movies", "anime"],
+        ["action", "adventure", "comedy", "crime", "drama"],
+        per_genre=50, target=100, log=lambda *_: None,
+    )
+
+    sections_called = {section for section, _, _ in client.calls}
+    assert "movies" in sections_called, client.calls
+    sections_found = {e["section"] for e in got}
+    assert {"tv", "movies"} <= sections_found
+
+
+def test_the_first_genre_is_swept_across_every_section_before_the_next():
+    from simkl_importer.discovery import gather_candidates
+
+    client = SectionAwareClient(per_page=50)
+    gather_candidates(
+        client, ["tv", "movies", "anime"], ["action", "adventure"],
+        per_genre=50, target=100, log=lambda *_: None,
+    )
+
+    first_three = client.calls[:3]
+    assert [genre for _, genre, _ in first_three] == ["action"] * 3
+    assert [section for section, _, _ in first_three] == ["tv", "movies", "anime"]
+
+
+def test_a_genre_is_never_left_half_swept():
+    """Stopping mid-genre would bias the pool towards the first section."""
+    from simkl_importer.discovery import gather_candidates
+
+    client = SectionAwareClient(per_page=50)
+    gather_candidates(
+        client, ["tv", "movies", "anime"], ["action", "adventure", "comedy"],
+        per_genre=50, target=10, log=lambda *_: None,
+    )
+
+    from collections import Counter
+    per_genre = Counter(genre for _, genre, _ in client.calls)
+    # whichever genres were touched, each got all three sections
+    assert set(per_genre.values()) == {3}, per_genre

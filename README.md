@@ -352,6 +352,31 @@ whatever the pager happened to reach; taking the best 100 of 400 gives you a
 list actually shaped by your profile. Your strongest genres are swept first, so
 the pool leans that way before ranking even starts.
 
+### Every genre is swept across every section
+
+The sweep goes genre first, section second: `action` across TV, movies and
+anime, then `adventure` across all three, and so on. Section first — all of TV,
+then all of movies — meant TV's genres filled the target on their own and the
+movie endpoints were never called at all, so a film could not reach the pool
+however well it matched. A genre is never left half-swept either, since
+stopping mid-genre would bias the pool towards whichever section is listed
+first.
+
+### It shows you what it learned
+
+For You has no setup screen, so the top of the card carries the profile it is
+working from:
+
+```
+Taste profile from 46 accepted title(s): action x21, thriller x14, crime x9
+```
+
+If that does not look like you, the recommendations will not either — and the
+fix is answering **Watched it** on a run of things you know rather than tuning
+anything. `--sort popular-this-month` is worth trying if the default all-time
+`rank` ordering leans more towards prestige than the blockbusters you actually
+watch.
+
 ### It digs until it finds enough
 
 The genre endpoints are paginated, so rather than taking page one and giving
@@ -447,6 +472,7 @@ and are appended to the same CSV.
 | `--count N` | how many titles For You shows (default 100, chosen from 4× that many) |
 | `--country CODES` | only titles released here, e.g. `us` or `us,gb` (default: anywhere) |
 | `--no-anime` | leave anime out of For You |
+| `--sort` | catalogue ordering: `rank` (all-time, default), `popular-this-month`, `popular-today` |
 | `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |

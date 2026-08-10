@@ -195,7 +195,8 @@ class WebFlow:
     """Drives setup -> build -> pick, with the browser polling for progress."""
 
     def __init__(self, client, store, queue, refresh_library=False, use_taste=True,
-                 mode="grid", target=None, countries=None, sections=None):
+                 mode="grid", target=None, countries=None, sections=None,
+                 sort="rank"):
         self.client = client
         self.store = store
         self.queue = queue
@@ -210,6 +211,7 @@ class WebFlow:
         # For You has no setup screen, so these come from the command line
         self.countries = countries or ["all-countries"]
         self.sections = sections or ["tv", "movies", "anime"]
+        self.sort = sort or "rank"
 
         self.token = secrets.token_urlsafe(24)
         self.finished = threading.Event()
@@ -276,6 +278,7 @@ class WebFlow:
             "countries": [{"value": v, "label": l} for v, l in COUNTRY_CHOICES],
             "picked_countries": self.countries,
             "picked_sections": self.sections,
+            "picked_sort": self.sort,
             "mode": self.mode,
             "target": self.target,
             "log": self.log_lines(),
@@ -470,12 +473,14 @@ def run_web_discovery(
     target: Optional[int] = None,
     countries: Optional[List[str]] = None,
     sections: Optional[List[str]] = None,
+    sort: str = "rank",
 ) -> List[WatchItem]:
     """Serve the whole flow, block until the browser submits, return the queue."""
     from .discovery import _remember_accepted
 
     flow = WebFlow(client, store, queue, refresh_library, use_taste,
-                   mode=mode, target=target, countries=countries, sections=sections)
+                   mode=mode, target=target, countries=countries,
+                   sections=sections, sort=sort)
     handler = type("BoundHandler", (Handler,), {"flow": flow})
     server = ThreadingHTTPServer((BIND_HOST, port), handler)
     url = f"http://{BIND_HOST}:{server.server_address[1]}/?token={flow.token}"
@@ -742,6 +747,7 @@ PAGE = r"""<!doctype html>
   </section>
 
   <section id="one" class="hide">
+    <p class="muted" id="oneProfileLine"></p>
     <p class="muted" id="oneSkipLine"></p>
     <div class="one">
       <div class="art" id="oneArt"></div>
@@ -812,6 +818,8 @@ let chosenEra = 'all-years';
 let chosenCountries = new Set(['all-countries']);
 let forYouCountries = ['all-countries'];
 let forYouSections = ['tv', 'movies', 'anime'];
+let forYouSort = 'rank';
+let profileSummary = '';
 let mode = 'grid';
 let cursor = 0;
 // ids actually put in front of you and answered - in For You you can stop
@@ -910,6 +918,8 @@ async function pollPrep() {
   mode = prep.mode || 'grid';
   if (prep.picked_countries) forYouCountries = prep.picked_countries;
   if (prep.picked_sections) forYouSections = prep.picked_sections;
+  if (prep.picked_sort) forYouSort = prep.picked_sort;
+  profileSummary = prep.summary || '';
   if (!prep.ready) { setTimeout(pollPrep, 600); return; }
   if (mode === 'foryou') {
     // nothing to configure - the profile picks the genres
@@ -927,7 +937,7 @@ async function startBuild() {
     // ranking still puts the closest matches first, so a wide sweep costs
     // nothing in relevance and gives the pager room to find fresh titles
     ? { sections: forYouSections, genres: [], favourites: [],
-        per_genre: 50, trending: false, sort: 'rank', year: 'all-years',
+        per_genre: 50, trending: false, sort: forYouSort, year: 'all-years',
         countries: forYouCountries }
     : {
         sections: Array.from(chosenSections),
@@ -987,6 +997,11 @@ async function pollBuild() {
       'Skipped ' + state.skipped + ' you have seen before: ' + state.skip_reasons.join(', ') + '.';
   }
   if (mode === 'foryou') {
+    // without a setup screen you never see what it decided your taste is,
+    // which makes a bad recommendation impossible to explain
+    $('oneProfileLine').textContent = profileSummary
+      ? profileSummary.replace(/\s+/g, ' ')
+      : 'No taste profile yet - these are ordered by popularity, not by you.';
     if (state.skipped) {
       $('oneSkipLine').textContent =
         'Skipped ' + state.skipped + ' you have seen before: ' + state.skip_reasons.join(', ') + '.';

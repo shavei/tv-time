@@ -100,12 +100,12 @@ class GenreLookup:
         self._dirty = True
         return genres
 
-    def enrich(self, items: Sequence[WatchItem], progress: bool = True) -> int:
+    def enrich(self, items: Sequence[WatchItem], progress: bool = True, log=print) -> int:
         """Fill in genres for queued items that do not have them yet."""
         missing = [item for item in items if not item.genres and item.ids.get("simkl")]
         uncached = [item for item in missing if str(item.ids["simkl"]) not in self.cache]
         if missing and progress and uncached:
-            print(f"  Looking up genres for {len(uncached)} title(s) you already queued...")
+            log(f"  Looking up genres for {len(uncached)} title(s) you already queued...")
 
         filled = 0
         for index, item in enumerate(missing, start=1):
@@ -113,7 +113,7 @@ class GenreLookup:
             if item.genres:
                 filled += 1
             if progress and uncached and index % 10 == 0:
-                print(f"    {index}/{len(missing)}")
+                log(f"    {index}/{len(missing)}")
         self.flush()
         return filled
 

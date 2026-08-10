@@ -1,1 +1,5 @@
 requests>=2.28
+
+# Optional: only for the terminal fallback (--tui), which paints posters as
+# colour blocks. The browser picker needs nothing beyond the standard library.
+pillow>=9.0

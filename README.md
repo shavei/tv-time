@@ -6,8 +6,10 @@ Two ways to get your history in, and they share the same import pipeline:
 
 1. **File import** — parse a `watched.csv` / `watched.json` export and mark
    everything in it as watched.
-2. **Discovery mode** — no export? Answer a stream of yes/no questions about
-   popular titles in the genres you like, and say how much of each you watched.
+2. **Discovery mode** — no export? It opens a page in your browser showing a
+   wall of real posters; click everything you've watched. Every answer teaches
+   it: later rounds are ordered best-match first and never re-ask about
+   something you passed on.
 
 Both feed a local queue which is then pushed to `POST /sync/history` in batches,
 with rate limiting, retries and a report of anything that could not be matched.
@@ -35,7 +37,8 @@ handy — the script asks for them on first run and stores them in
 ```bash
 python -m simkl_importer                       # interactive menu
 python -m simkl_importer --file watched.csv    # parse a file and import it
-python -m simkl_importer --discover            # interactive discovery session
+python -m simkl_importer --discover            # poster picker in your browser
+python -m simkl_importer --discover --tui     # stay in the terminal instead
 python -m simkl_importer --send                # push the saved queue
 python -m simkl_importer --file watched.csv --dry-run   # parse + match, post nothing
 ```
@@ -88,22 +91,89 @@ Favourite shows or movies (comma separated, blank to skip).
 Genres to browse (comma separated).
 ```
 
-Favourites are looked up to seed the genre list, then popular titles are pulled
-per genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`, sorted by
-`popular-this-month`), optionally topped up from Simkl Trending. Anything already
-on your account is filtered out first, then each remaining title is offered:
+Those four questions are asked in the terminal. Favourites are looked up to
+seed the genre list, then titles are pulled per genre (`/tv/genres/...`,
+`/movies/genres/...`, `/anime/genres/...`, sorted by `popular-this-month`),
+optionally topped up from Simkl Trending. Anything already on your account,
+already queued, or previously rejected is filtered out, and the rest is ranked
+against your taste profile.
+
+### The poster picker
+
+Then a page opens in your browser: a grid of real posters, best match first.
 
 ```
-[7/120] Severance (2022)  (Drama, Mystery | Simkl 8.9)   <drama>
+  Poster picker is running in your browser.
+  http://127.0.0.1:51423/?token=l4FqNheoDu3Auw8ZX9oa4TebQNVqT0YA
+```
+
+Click every title you've watched, filter by title or genre to find things, then
+**Continue** to say how much of each show you saw — `all` by default, or `s1`,
+`1-3`, `s2e5`, `s2e1-10`, or combinations like `s1, s2e1-4`. **Add to queue**
+hands it back to the terminal, which sends it to Simkl.
+
+**No image is ever written to disk.** The `<img>` tags point straight at
+Simkl's `wsrv.nl` CDN, so your browser fetches the posters itself, at full
+quality, and its ordinary HTTP cache covers Simkl's "cache images by URL" rule.
+Nothing but JSON crosses the local server.
+
+The server binds `127.0.0.1` only, on a random free port, and every request
+needs the one-time token in the URL — plus the `Host` header must be loopback,
+so a web page you happen to have open cannot reach it. It shuts down as soon as
+you submit.
+
+`--web-port N` pins the port, `--no-browser` just prints the URL.
+
+### Terminal fallback (`--tui`)
+
+`--discover --tui` keeps the old one-at-a-time walkthrough, drawing posters as
+24-bit colour half-blocks:
+
+```
+▄▄▄▄▄▄▄▄▄▄  [7/120]
+██▓▓▒▒░░██  Severance (2022)
+██▓▓▒▒░░██  Drama, Mystery
+██▓▓▒▒░░██  Simkl 8.9  IMDb 8.7
+██▓▓▒▒░░██  ████████░░ 84% match
+▀▀▀▀▀▀▀▀▀▀  from: drama
+
       Watched it? [y/N/s/b/q]: y
       How much? (all / s1 / 1-3 / s2e5 / s2e1-10, blank = all, x = never mind)
       > s1, s2e1-4
       queued: S01 (all), S02 x4ep
 ```
 
-`s` skips the rest of that genre, `b` goes back one, `q` stops and keeps the
-queue. The queue is written to disk after every answer, so a long session
+`n` (or just Enter) skips, `s` skips the rest of that genre, `b` goes back one,
+`q` stops and keeps the queue. This mode needs Pillow, and *does* cache the
+downscaled images in `~/.simkl-importer/posters/` — that is what Simkl's docs
+ask for when an app fetches images itself. `--no-posters` turns them off,
+`--poster-width N` changes the size (default 22 columns).
+
+Either way the queue is written to disk after every answer, so a long session
 survives Ctrl-C — resume with `--send`.
+
+### Taste profile
+
+Every title you accept is recorded in `~/.simkl-importer/accepted.json` — which,
+unlike the queue, is *not* cleared when you send. From it the script builds a
+profile of genres and decades, and every "no" is remembered in `rejected.json`
+as a negative signal.
+
+Round two then:
+
+* ranks candidates by genre affinity, with common genres damped by IDF so
+  "drama" does not drown out "cyberpunk", plus small nudges for rating and for
+  the decades you tend to watch;
+* shows the resulting `84% match` bar and offers the best matches first;
+* suggests genres to browse instead of making you think of them;
+* never asks about anything you already said no to.
+
+If there is nothing recorded yet but your account already has titles in it, the
+first round seeds the profile from that library instead (up to 150 titles, genre
+lookups cached forever in `genre-cache.json`).
+
+`--no-taste` falls back to plain popularity order. `--forget-rejected` starts
+asking about passed-over titles again.
 
 ## Rate limiting and quotas
 
@@ -158,6 +228,13 @@ and are appended to the same CSV.
 | `--no-resolve` | do not pre-resolve IDs |
 | `--interactive-match` | confirm weak title matches by hand |
 | `--refresh-library` | re-download what is already on your account |
+| `--tui` | run discovery in the terminal instead of the browser |
+| `--web-port N` | pin the picker's port (default: a free one) |
+| `--no-browser` | print the picker URL instead of opening a browser |
+| `--no-posters` | do not draw poster thumbnails in `--tui` mode |
+| `--poster-width N` | poster width in terminal columns (default 22) |
+| `--no-taste` | rank by popularity instead of your taste profile |
+| `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |
 | `--verbose` | log every HTTP request |
@@ -171,8 +248,10 @@ Credentials can also come from `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET` and
 pip install pytest && python -m pytest tests -q
 ```
 
-The suite is fully offline — parsing, payload shapes, batching and the progress
-mini-language. Nothing in it touches the network.
+The suite is fully offline — parsing, payload shapes, batching, the progress
+mini-language, taste ranking, poster rendering, and the picker's HTTP server
+(token checks, `Host` validation, commit handling) driven over a real socket on
+loopback. Nothing in it reaches the internet.
 
 ## Layout
 
@@ -184,7 +263,10 @@ simkl_importer/
   config.py      credential/queue/cache storage under ~/.simkl-importer
   parsers.py     watched.csv / watched.json -> WatchItem
   matching.py    title -> Simkl ID resolution, with an on-disk cache
-  discovery.py   the interactive yes/no session
+  discovery.py   candidate gathering + the terminal yes/no walkthrough
+  web.py         the localhost poster picker (stdlib only)
+  taste.py       taste profile from your answers, and candidate ranking
+  images.py      poster thumbnails as terminal colour blocks (--tui)
   progress.py    "s1, s2e1-4" -> seasons/episodes
   sync.py        batching, POST /sync/history, reporting
   models.py      WatchItem and the Simkl payload shapes

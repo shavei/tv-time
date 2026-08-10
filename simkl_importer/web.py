@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from .images import poster_url
-from .models import TV, WatchItem
+from .models import PLAN, TV, WATCHED, WatchItem
 from .progress import ProgressError, apply_progress, parse_progress
 from .taste import candidate_genres, candidate_rating
 
@@ -123,6 +123,11 @@ class DiscoverySession:
             item = self.items.get(str(record.get("id")))
             if item is None:
                 continue
+            if record.get("intent") == PLAN:
+                item.intent = PLAN
+                accepted.append(item)
+                continue
+            item.intent = WATCHED
             spec = (record.get("progress") or "all").strip()
             if item.is_movie:
                 accepted.append(item)
@@ -140,7 +145,12 @@ class DiscoverySession:
 
         self.accepted = accepted
         self.rejected_ids = [str(i) for i in (answers.get("rejected") or []) if str(i) in self.items]
-        return {"ok": True, "queued": len(accepted), "rejected": len(self.rejected_ids)}
+        return {
+            "ok": True,
+            "queued": len([i for i in accepted if not i.is_plan]),
+            "planned": len([i for i in accepted if i.is_plan]),
+            "rejected": len(self.rejected_ids),
+        }
 
 
 def _blank_profile():
@@ -438,11 +448,13 @@ PAGE = r"""<!doctype html>
   :root {
     --bg: #f6f6f7; --panel: #fff; --ink: #16161a; --muted: #6b6b76;
     --line: #e2e2e8; --accent: #0b7285; --accent-ink: #fff; --shadow: rgba(0,0,0,.10);
+    --later: #b35309; --later-ink: #fff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #131316; --panel: #1c1c21; --ink: #f0f0f3; --muted: #9a9aa6;
       --line: #2e2e36; --accent: #3bc9db; --accent-ink: #08282e; --shadow: rgba(0,0,0,.45);
+      --later: #f59f00; --later-ink: #2b1a00;
     }
   }
   * { box-sizing: border-box; }
@@ -494,6 +506,7 @@ PAGE = r"""<!doctype html>
   }
   .card:hover { transform: translateY(-2px); }
   .card.on { border-color: var(--accent); }
+  .card.later { border-color: var(--later); }
   .card .shot { aspect-ratio: 2 / 3; background: var(--line); position: relative; }
   .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .card .noimg {
@@ -508,7 +521,15 @@ PAGE = r"""<!doctype html>
     border-radius: 50%; background: var(--accent); color: var(--accent-ink);
     display: none; place-items: center; font-weight: 700; font-size: 15px;
   }
-  .card.on .tick { display: grid; }
+  .card.on .tick, .card.later .tick { display: grid; }
+  .card.later .tick { background: var(--later); color: var(--later-ink); font-size: 13px; }
+  .legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 0 0 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+  .swatch { width: 13px; height: 13px; border-radius: 4px; display: inline-block; }
+  .pill {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px; margin-left: 8px;
+    background: var(--later); color: var(--later-ink); font-weight: 600;
+  }
   .match {
     position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.72);
     color: #fff; font-size: 11px; padding: 2px 7px; border-radius: 20px;
@@ -590,11 +611,19 @@ PAGE = r"""<!doctype html>
 
   <section id="pick" class="hide">
     <p class="muted" id="skipLine"></p>
+    <p class="legend">
+      <span><b>Click once</b></span>
+      <span><i class="swatch" style="background:var(--accent)"></i> watched it</span>
+      <span><b>Click again</b></span>
+      <span><i class="swatch" style="background:var(--later)"></i> want to watch it</span>
+      <span><b>Click a third time</b> to clear</span>
+    </p>
     <div class="grid" id="grid"></div>
   </section>
 
   <section id="detail" class="hide">
-    <p class="muted">How much of each show did you watch? Blank or "all" means the whole thing.
+    <p class="muted" id="planLine"></p>
+    <p class="muted" id="detailHelp">How much of each show did you watch? Blank or "all" means the whole thing.
        You can write <code>s1</code>, <code>1-3</code>, <code>s2e5</code>, <code>s2e1-10</code>,
        or combinations like <code>s1, s2e1-4</code>.</p>
     <table id="rows"></table>
@@ -613,7 +642,9 @@ const api = (path) => path + '?token=' + encodeURIComponent(token);
 const $ = (id) => document.getElementById(id);
 
 let step = 'setup';
-let candidates = [], picked = new Set();
+let candidates = [];
+// id -> 'watched' | 'plantowatch'; absent means not watched
+let picked = new Map();
 let chosenSections = new Set(['tv', 'movies', 'anime']);
 let chosenGenres = new Set();
 let chosenSort = 'rank';
@@ -774,9 +805,16 @@ function placeholder(c) {
   return d;
 }
 
+function cardClass(id) {
+  const state = picked.get(id);
+  if (state === 'watched') return 'card on';
+  if (state === 'plantowatch') return 'card later';
+  return 'card';
+}
+
 function card(c) {
   const el = document.createElement('button');
-  el.className = 'card' + (picked.has(c.id) ? ' on' : '');
+  el.className = cardClass(c.id);
   el.type = 'button';
 
   const shot = document.createElement('div');
@@ -797,7 +835,7 @@ function card(c) {
   }
   const tick = document.createElement('span');
   tick.className = 'tick';
-  tick.textContent = '✓';
+  tick.textContent = picked.get(c.id) === 'plantowatch' ? '＋' : '✓';
   shot.appendChild(tick);
 
   const meta = document.createElement('div');
@@ -816,8 +854,14 @@ function card(c) {
 
   el.append(shot, meta);
   el.onclick = () => {
-    picked.has(c.id) ? picked.delete(c.id) : picked.add(c.id);
-    el.classList.toggle('on');
+    // three states: watched -> want to watch -> neither
+    const state = picked.get(c.id);
+    if (!state) picked.set(c.id, 'watched');
+    else if (state === 'watched') picked.set(c.id, 'plantowatch');
+    else picked.delete(c.id);
+
+    el.className = cardClass(c.id);
+    tick.textContent = picked.get(c.id) === 'plantowatch' ? '＋' : '✓';
     refreshCount();
   };
   return el;
@@ -835,9 +879,19 @@ function render() {
   refreshCount();
 }
 
+function counts() {
+  let watched = 0, later = 0;
+  picked.forEach(v => (v === 'watched' ? watched++ : later++));
+  return { watched, later };
+}
+
 function refreshCount() {
   if (step !== 'pick' && step !== 'detail') { $('count').textContent = ''; return; }
-  $('count').textContent = picked.size + ' of ' + candidates.length + ' selected';
+  const { watched, later } = counts();
+  const bits = [];
+  if (watched) bits.push(watched + ' watched');
+  if (later) bits.push(later + ' to watch later');
+  $('count').textContent = bits.length ? bits.join(', ') : 'nothing selected yet';
   if (step === 'pick') {
     // "I have watched none of these" is a real answer, not a dead end: it marks
     // them all as seen-and-declined so they never come round again.
@@ -854,9 +908,16 @@ function showDetail() {
   $('back').classList.remove('hide');
   $('next').textContent = 'Add to queue';
 
+  const { later } = counts();
+  $('planLine').textContent = later
+    ? later + ' title(s) go straight to Plan to Watch - nothing to answer for those.'
+    : '';
+  const watchedOnes = candidates.filter(c => picked.get(c.id) === 'watched');
+  $('detailHelp').classList.toggle('hide', watchedOnes.length === 0);
+
   const table = $('rows');
   table.textContent = '';
-  candidates.filter(c => picked.has(c.id)).forEach(c => {
+  watchedOnes.forEach(c => {
     const tr = document.createElement('tr');
 
     const thumb = document.createElement('td');
@@ -904,8 +965,10 @@ function backToPick() {
 
 async function commit() {
   const accepted = candidates.filter(c => picked.has(c.id)).map(c => {
+    const intent = picked.get(c.id);
+    if (intent === 'plantowatch') return { id: c.id, intent };
     const field = document.querySelector('input[data-for="' + CSS.escape(c.id) + '"]');
-    return { id: c.id, progress: field ? field.value : 'all' };
+    return { id: c.id, intent: 'watched', progress: field ? field.value : 'all' };
   });
   const rejected = candidates.filter(c => !picked.has(c.id)).map(c => c.id);
 
@@ -920,10 +983,13 @@ async function commit() {
   showErrors([]);
   show('done');
   $('heading').textContent = 'Done';
-  $('doneText').textContent = data.queued
-    ? data.queued + ' title(s) queued, ' + data.rejected + ' marked as not watched.'
-    : 'None of those ' + data.rejected + ' — noted, you will not be asked about them again. '
-      + 'Run the command again for a different era or genre.';
+  const parts = [];
+  if (data.queued) parts.push(data.queued + ' queued as watched');
+  if (data.planned) parts.push(data.planned + ' added to Plan to Watch');
+  if (data.rejected) parts.push(data.rejected + ' marked as not watched');
+  $('doneText').textContent = parts.length
+    ? parts.join(', ') + '.'
+    : 'Nothing selected.';
   ['next', 'back', 'filter'].forEach(id => $(id).classList.add('hide'));
   $('count').textContent = '';
 }
@@ -931,6 +997,7 @@ async function commit() {
 $('next').onclick = () => {
   if (step === 'setup') return startBuild();
   if (step === 'pick') return picked.size ? showDetail() : commit();
+  if (step === 'detail' && counts().watched === 0) return commit();
   if (step === 'detail') return commit();
 };
 $('back').onclick = () => { if (step === 'detail') backToPick(); };

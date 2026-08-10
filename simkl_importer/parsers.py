@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from .models import ANIME, MOVIE, TV, WatchItem
+from .models import ANIME, MOVIE, PLAN, TV, WATCHED, WatchItem
 
 # header alias -> canonical field
 FIELD_ALIASES: Dict[str, str] = {
@@ -77,6 +77,10 @@ FIELD_ALIASES: Dict[str, str] = {
     "episode_id": "_ignore",
     "id": "_ignore",
 }
+
+# a status column saying any of these means "not watched yet, just queue it"
+PLAN_WORDS = {"plantowatch", "plan to watch", "plan_to_watch", "watchlist",
+              "want to watch", "later", "watch later", "towatch", "to watch"}
 
 MOVIE_WORDS = {"movie", "movies", "film", "films", "feature"}
 ANIME_WORDS = {"anime"}
@@ -229,12 +233,14 @@ def row_to_item(row: Dict[str, Any]) -> Optional[WatchItem]:
         if value:
             ids[key] = int(value) if key != "imdb" and value.isdigit() else value
 
+    status = _clean(row.get("status")).lower() or None
     item = WatchItem(
         title=title,
         media_type=guess_media_type({**row, "season": season, "episode": episode}),
         year=year,
         ids=ids,
-        status=_clean(row.get("status")).lower() or None,
+        status=status,
+        intent=PLAN if status in PLAN_WORDS else WATCHED,
         watched_at=row.get("watched_at"),
         rating=row.get("rating"),
         source="file",

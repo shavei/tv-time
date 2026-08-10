@@ -108,7 +108,7 @@ def test_candidate_without_a_poster_still_renders():
 def test_commit_applies_progress_and_records_rejections(flow):
     result = flow.commit({"accepted": [{"id": "1", "progress": "s1, s2e1-2"}], "rejected": ["2"]})
 
-    assert result == {"ok": True, "queued": 1, "rejected": 1}
+    assert result == {"ok": True, "queued": 1, "planned": 0, "rejected": 1}
     assert flow.finished.is_set()
     queued = flow.session.accepted[0]
     assert queued.seasons[1].episodes == []
@@ -408,7 +408,7 @@ def test_none_of_these_still_records_every_rejection(flow):
     """Watching none of them is an answer, not a dead end."""
     result = flow.commit({"accepted": [], "rejected": ["1", "2"]})
 
-    assert result == {"ok": True, "queued": 0, "rejected": 2}
+    assert result == {"ok": True, "queued": 0, "planned": 0, "rejected": 2}
     assert flow.finished.is_set()
     assert flow.session.accepted == []
     assert sorted(flow.session.rejected_ids) == ["1", "2"]
@@ -420,3 +420,48 @@ def test_page_offers_a_none_of_these_button(flow):
     assert "None of these" in PAGE
     # and the button must not be disabled at zero selections any more
     assert "disabled = step === 'pick' && picked.size === 0" not in PAGE
+
+
+# ------------------------------------------------------------- plan to watch
+
+
+def test_commit_splits_watched_from_plan_to_watch(flow):
+    result = flow.commit({
+        "accepted": [
+            {"id": "1", "intent": "watched", "progress": "s1"},
+            {"id": "2", "intent": "plantowatch"},
+        ],
+        "rejected": [],
+    })
+
+    assert result == {"ok": True, "queued": 1, "planned": 1, "rejected": 0}
+    by_title = {item.title: item for item in flow.session.accepted}
+    assert by_title["Severance"].is_plan is False
+    assert by_title["Severance"].seasons[1].episodes == []
+    assert by_title["Heat"].is_plan is True
+
+
+def test_plan_to_watch_items_need_no_progress(flow):
+    """A planned item must not be rejected for having nonsense in the box."""
+    result = flow.commit({
+        "accepted": [{"id": "1", "intent": "plantowatch", "progress": "gibberish"}],
+        "rejected": [],
+    })
+
+    assert result["ok"] is True
+    assert result["planned"] == 1
+    assert flow.session.accepted[0].is_plan
+
+
+def test_missing_intent_still_means_watched(flow):
+    """Older payloads, and the default path, mean "I watched it"."""
+    flow.commit({"accepted": [{"id": "1", "progress": "all"}], "rejected": []})
+    assert flow.session.accepted[0].is_plan is False
+
+
+def test_page_offers_the_three_card_states():
+    from simkl_importer.web import PAGE
+
+    assert "plantowatch" in PAGE
+    assert "want to watch it" in PAGE
+    assert "Plan to Watch" in PAGE

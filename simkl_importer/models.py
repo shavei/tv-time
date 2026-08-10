@@ -14,6 +14,12 @@ ANIME = "anime"
 
 VALID_STATUSES = {"watching", "plantowatch", "completed", "dropped", "hold"}
 
+# What we intend to do with an item: record it as watched (POST /sync/history)
+# or just park it on a watchlist (POST /sync/add-to-list).
+WATCHED = "watched"
+PLAN = "plantowatch"
+VALID_INTENTS = {WATCHED, PLAN}
+
 # ids we know how to pass through to Simkl (anything else is dropped so we
 # never send junk keys the API has to guess at)
 KNOWN_ID_KEYS = {"simkl", "imdb", "tmdb", "tvdb", "mal", "anidb", "slug"}
@@ -73,6 +79,7 @@ class WatchItem:
     source: str = "file"
     poster: str = ""
     genres: List[str] = field(default_factory=list)
+    intent: str = WATCHED
     # set by the matcher; None until we have tried to resolve it
     matched: Optional[bool] = None
     match_note: str = ""
@@ -82,6 +89,11 @@ class WatchItem:
     @property
     def is_movie(self) -> bool:
         return self.media_type == MOVIE
+
+    @property
+    def is_plan(self) -> bool:
+        """Parked on a watchlist rather than marked watched."""
+        return self.intent == PLAN
 
     @property
     def bucket(self) -> str:
@@ -105,6 +117,8 @@ class WatchItem:
         return f"{self.title}{year}"
 
     def describe_progress(self) -> str:
+        if self.is_plan:
+            return "plan to watch"
         if self.is_movie:
             return "movie"
         if self.whole_thing:
@@ -152,6 +166,9 @@ class WatchItem:
         self.status = self.status or other.status
         self.watched_at = self.watched_at or other.watched_at
         self.rating = self.rating if self.rating is not None else other.rating
+        # actually watching it beats planning to
+        if other.intent == WATCHED:
+            self.intent = WATCHED
         self.poster = self.poster or other.poster
         if other.genres and not self.genres:
             self.genres = list(other.genres)
@@ -166,6 +183,16 @@ class WatchItem:
 
     def clean_ids(self) -> Dict[str, Any]:
         return {k: v for k, v in self.ids.items() if k in KNOWN_ID_KEYS and v}
+
+    def to_list_payload(self) -> Dict[str, Any]:
+        """Item shape for POST /sync/add-to-list."""
+        payload: Dict[str, Any] = {"title": self.title, "to": self.intent}
+        if self.year:
+            payload["year"] = self.year
+        ids = self.clean_ids()
+        if ids:
+            payload["ids"] = ids
+        return payload
 
     def to_payload(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"title": self.title}
@@ -217,6 +244,7 @@ class WatchItem:
             "source": self.source,
             "poster": self.poster,
             "genres": self.genres,
+            "intent": self.intent,
             "seasons": [
                 {
                     "number": season.number,
@@ -243,6 +271,7 @@ class WatchItem:
             source=raw.get("source", "file"),
             poster=raw.get("poster", ""),
             genres=list(raw.get("genres") or []),
+            intent=raw.get("intent") if raw.get("intent") in VALID_INTENTS else WATCHED,
         )
         for season in raw.get("seasons") or []:
             number = int(season["number"])

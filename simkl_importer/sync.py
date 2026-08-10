@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .client import SimklClient, SimklError
-from .models import WatchItem
+from .models import PLAN, WatchItem
 
 DEFAULT_BATCH_SIZE = 50
 
@@ -18,6 +18,7 @@ class SyncReport:
     added_movies: int = 0
     added_shows: int = 0
     added_episodes: int = 0
+    added_watchlist: int = 0
     batches_sent: int = 0
     batches_failed: int = 0
     not_found: List[Dict[str, Any]] = field(default_factory=list)
@@ -26,7 +27,19 @@ class SyncReport:
 
     @property
     def total_added(self) -> int:
-        return self.added_movies + self.added_shows + self.added_episodes
+        return self.added_movies + self.added_shows + self.added_episodes + self.added_watchlist
+
+    def merge(self, other: "SyncReport") -> "SyncReport":
+        self.added_movies += other.added_movies
+        self.added_shows += other.added_shows
+        self.added_episodes += other.added_episodes
+        self.added_watchlist += other.added_watchlist
+        self.batches_sent += other.batches_sent
+        self.batches_failed += other.batches_failed
+        self.not_found.extend(other.not_found)
+        self.errors.extend(other.errors)
+        self.statuses.extend(other.statuses)
+        return self
 
     def summary(self) -> str:
         lines = [
@@ -39,6 +52,7 @@ class SyncReport:
             f"  Movies added      : {self.added_movies}",
             f"  Shows added       : {self.added_shows}",
             f"  Episodes added    : {self.added_episodes}",
+            f"  Plan to watch     : {self.added_watchlist}",
             f"  Not found by Simkl: {len(self.not_found)}",
         ]
         if self.errors:
@@ -50,14 +64,29 @@ class SyncReport:
         return "\n".join(lines)
 
 
-def build_batches(items: Sequence[WatchItem], batch_size: int = DEFAULT_BATCH_SIZE) -> List[Dict[str, Any]]:
-    """Group items into /sync/history payloads of at most `batch_size` items."""
+def split_by_intent(items: Sequence[WatchItem]):
+    """Watched items go to /sync/history, planned ones to /sync/add-to-list."""
+    watched = [item for item in items if not item.is_plan]
+    planned = [item for item in items if item.is_plan]
+    return watched, planned
+
+
+def build_batches(
+    items: Sequence[WatchItem],
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    for_list: bool = False,
+) -> List[Dict[str, Any]]:
+    """Group items into payloads of at most `batch_size` items.
+
+    `for_list` switches from the /sync/history item shape to the
+    /sync/add-to-list one, which carries a `to` field instead of progress.
+    """
     batches: List[Dict[str, Any]] = []
     current: Dict[str, List[Dict[str, Any]]] = {"movies": [], "shows": []}
     count = 0
 
     for item in items:
-        current[item.bucket].append(item.to_payload())
+        current[item.bucket].append(item.to_list_payload() if for_list else item.to_payload())
         count += 1
         if count >= batch_size:
             batches.append({key: value for key, value in current.items() if value})
@@ -141,6 +170,76 @@ def push_history(
         if len(report.not_found) > 15:
             print(f"      ... and {len(report.not_found) - 15} more")
 
+    return report
+
+
+def push_watchlist(
+    client: SimklClient,
+    items: Sequence[WatchItem],
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    dry_run: bool = False,
+) -> SyncReport:
+    """Park items on a Simkl watchlist via POST /sync/add-to-list."""
+    report = SyncReport()
+    batches = build_batches(items, batch_size, for_list=True)
+    if not batches:
+        return report
+
+    print(
+        f"\nAdding {len(items)} title(s) to Plan to Watch "
+        f"in {len(batches)} batch(es) of up to {batch_size}."
+        + ("  [DRY RUN - nothing will be written]" if dry_run else "")
+    )
+
+    for index, payload in enumerate(batches, start=1):
+        size = sum(len(value) for value in payload.values())
+        prefix = f"  [{index}/{len(batches)}] {size} item(s)"
+        if dry_run:
+            print(f"{prefix} - would POST /sync/add-to-list")
+            report.batches_sent += 1
+            continue
+
+        print(f"{prefix} - POST /sync/add-to-list ... ", end="", flush=True)
+        try:
+            response = client.add_to_list(payload)
+        except SimklError as exc:
+            report.batches_failed += 1
+            report.errors.append(f"watchlist batch {index}: {exc}")
+            print("FAILED")
+            print(f"      {exc}")
+            continue
+
+        report.batches_sent += 1
+        # this endpoint echoes the items it accepted rather than counting them
+        added = response.get("added") or {}
+        report.added_watchlist += sum(
+            len(added.get(bucket) or []) for bucket in ("movies", "shows")
+        )
+
+        not_found = response.get("not_found") or {}
+        for bucket in ("movies", "shows"):
+            for entry in not_found.get(bucket) or []:
+                report.not_found.append({"bucket": bucket, "entry": entry})
+        print("ok")
+
+    return report
+
+
+def push_queue(
+    client: SimklClient,
+    items: Sequence[WatchItem],
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    dry_run: bool = False,
+) -> SyncReport:
+    """Send the whole queue: watched history first, then the watchlist."""
+    watched, planned = split_by_intent(items)
+    report = SyncReport()
+    if watched:
+        report.merge(push_history(client, watched, batch_size, dry_run))
+    if planned:
+        report.merge(push_watchlist(client, planned, batch_size, dry_run))
+    if not watched and not planned:
+        print("  Nothing to send.")
     return report
 
 

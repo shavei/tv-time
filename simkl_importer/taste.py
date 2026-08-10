@@ -215,11 +215,12 @@ def genre_idf(entries: Sequence[Dict[str, Any]]) -> Dict[str, float]:
 def match_fraction(candidate: Dict[str, Any], profile: TasteProfile) -> Optional[float]:
     """How well this title matches the profile, 0..1, on its own terms.
 
-    Deliberately *absolute*. Ranking positions are relative by nature, but a
-    percentage shown to a person is read as "how much is this me?" - so a title
-    sharing nothing with your profile has to come out near zero even when it is
-    the best of a bad pool, and only something made of your strongest genres
-    can approach 100.
+    Cosine similarity between the title's genres and your affinity weights.
+    The averaging this replaced made 100% far too cheap: one genre in common
+    with a broad profile scored the same as a title matching it exactly.
+    Comparing the *shapes* fixes that - a lone "Adventure" cannot look like a
+    perfect fit for someone whose profile is crime and thriller, and reaching
+    100% means covering what you actually watch, not clipping one corner of it.
 
     None means we cannot say: no profile yet, or no genres on the title.
     """
@@ -229,14 +230,19 @@ def match_fraction(candidate: Dict[str, Any], profile: TasteProfile) -> Optional
     if not genres:
         return None
 
-    affinity = profile.genre_affinity()
-    strongest = max(affinity.values(), default=0.0)
-    if strongest <= 0:
+    affinity = {g: w for g, w in profile.genre_affinity().items() if w > 0}
+    if not affinity:
         return None
 
-    # average affinity across the title's genres, scaled against your best one
-    per_genre = [max(0.0, affinity.get(genre, 0.0)) for genre in genres]
-    return max(0.0, min(1.0, (sum(per_genre) / len(per_genre)) / strongest))
+    overlap = sum(affinity.get(genre, 0.0) for genre in genres)
+    if overlap <= 0:
+        return 0.0
+
+    profile_norm = math.sqrt(sum(weight * weight for weight in affinity.values()))
+    title_norm = math.sqrt(len(genres))
+    if not profile_norm or not title_norm:
+        return None
+    return max(0.0, min(1.0, overlap / (profile_norm * title_norm)))
 
 
 def score_candidate(

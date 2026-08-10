@@ -589,3 +589,57 @@ def test_page_shows_a_summary_and_backfills_genres():
     assert "detail.genres" in PAGE
     # and it must not paint a stale summary onto the next card
     assert "candidates[cursor].id !== c.id" in PAGE
+
+
+# ------------------------------------------------------------ overview tidying
+
+
+def test_overview_strips_the_markup_simkl_sends():
+    from simkl_importer.web import clean_overview
+
+    raw = "First part. <br><br> <br><br>Second part with <i>emphasis</i> and &amp; entities."
+    out = clean_overview(raw)
+
+    assert "<br>" not in out and "<i>" not in out
+    assert "&amp;" not in out and "&" in out
+    assert "First part. Second part" in out
+
+
+def test_overview_is_trimmed_at_a_sentence():
+    from simkl_importer.web import clean_overview
+
+    text = ("One sentence that runs on a while. " * 12).strip()
+    out = clean_overview(text, limit=120)
+
+    assert len(out) <= 121
+    assert out.endswith(".")
+    assert "…" not in out  # a clean sentence break needs no ellipsis
+
+
+def test_overview_falls_back_to_an_ellipsis_without_a_sentence_break():
+    from simkl_importer.web import clean_overview
+
+    out = clean_overview("word " * 200, limit=60)
+
+    assert len(out) <= 61
+    assert out.endswith("…")
+
+
+def test_short_overviews_are_left_alone():
+    from simkl_importer.web import clean_overview
+
+    assert clean_overview("A tight little synopsis.") == "A tight little synopsis."
+    assert clean_overview("") == ""
+    assert clean_overview(None) == ""
+
+
+def test_detail_returns_a_cleaned_overview(tmp_path, session):
+    client = DetailClient(payload={
+        "overview": "Line one.<br><br>Line two with &quot;quotes&quot;.",
+        "genres": ["Drama"],
+    })
+    flow = WebFlow(client=client, store=Store(tmp_path / "home"), queue=[])
+    flow.session = session
+
+    overview = flow.detail("1")["overview"]
+    assert overview == 'Line one. Line two with "quotes".'

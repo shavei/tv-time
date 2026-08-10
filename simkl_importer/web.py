@@ -14,8 +14,10 @@ Standard library only - no web framework, no new dependency.
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -64,6 +66,35 @@ def open_in_browser(url: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# Simkl overviews carry markup - <br><br> between paragraphs, occasionally an
+# <i> or an entity - which is fine in a browser but arrives here as text.
+_BREAK = re.compile(r"<\s*br\s*/?\s*>", re.I)
+_TAG = re.compile(r"<[^>]+>")
+_SPACE = re.compile(r"\s+")
+
+# a synopsis, not the whole plot; the point is to recognise the thing
+OVERVIEW_LIMIT = 400
+
+
+def clean_overview(text: str, limit: int = OVERVIEW_LIMIT) -> str:
+    """Turn a Simkl overview into a short plain-text summary."""
+    if not text:
+        return ""
+    plain = _BREAK.sub(" ", str(text))
+    plain = _TAG.sub("", plain)
+    plain = html.unescape(plain)
+    plain = _SPACE.sub(" ", plain).strip()
+    if len(plain) <= limit:
+        return plain
+
+    # cut at the last sentence that fits, so it does not end mid-clause
+    window = plain[: limit + 1]
+    cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if cut > limit // 2:
+        return window[: cut + 1]
+    return window[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 BIND_HOST = "127.0.0.1"
@@ -329,7 +360,7 @@ class WebFlow:
             return {}
 
         detail = {
-            "overview": (summary.get("overview") or "").strip(),
+            "overview": clean_overview(summary.get("overview") or ""),
             "genres": [str(g) for g in (summary.get("genres") or [])],
             "runtime": summary.get("runtime"),
             "network": summary.get("network") or summary.get("country") or "",

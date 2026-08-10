@@ -205,15 +205,21 @@ survives Ctrl-C — resume with `--send`.
 
 ### What the match percentage means
 
-It is the share of a title's genres that are ones you actually watch, weighted
-by how much you watch them and scaled against your strongest genre. It is
-**absolute**: a title made of your favourite genres approaches 100%, and one
-sharing nothing with your profile reads 0% — even if it happens to be the best
-of a weak batch.
+It compares the *shape* of a title's genres against the shape of your profile
+— cosine similarity between the title's genres and your affinity weights. It is
+**absolute**: only a title covering what you actually watch approaches 100%,
+and one sharing nothing reads 0% even if it is the best of a weak batch.
 
-That distinction matters. An earlier version stretched scores across the pool,
-so the top item always showed 100% and the bottom always 0% no matter how
-badly everything fitted, which made unrelated titles look like strong matches.
+Two earlier versions got this wrong in different ways, and both made unrelated
+titles look like strong matches:
+
+* stretching scores across the pool, so the top item always read 100% and the
+  bottom always 0% however badly everything fitted;
+* then averaging affinity across a title's genres, which made **one** genre in
+  common with a broad profile score as highly as an exact match.
+
+Comparing shapes fixes both. For a crime-and-thriller profile: a crime thriller
+scores in the nineties, a crime drama around sixty, a lone "Adventure" zero.
 
 Rating and era only break ties between titles that match you equally well —
 they can never push something above a title that actually fits your taste.
@@ -298,7 +304,10 @@ showing you titles — one at a time, biggest match first:
 Each card carries a short synopsis, fetched for that title as you reach it and
 cached forever afterwards — a hundred summaries up front would be a hundred
 requests for cards you may never see. The next card's is prefetched while you
-read, so it is usually there before you are.
+read, so it is usually there before you are. Simkl's overviews arrive with
+markup in them (`<br><br>` between paragraphs, the odd entity), which is
+stripped, and they are trimmed at a sentence boundary to roughly 400
+characters — enough to recognise the thing, not the whole plot.
 
 Say **Watched it** and it asks how much right there (`all` by default, with
 `s1` / `s1-s2` / `s1-s3` shortcuts). Say **Want to watch** and it goes to Plan

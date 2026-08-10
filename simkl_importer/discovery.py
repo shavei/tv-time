@@ -278,15 +278,16 @@ def gather_candidates(
     depth = max(1, max_pages) if target is not None else 1
     for page in range(1, depth + 1):
         exhausted = True
-        for section in sections:
-            # the anime endpoint has no country segment, so sweeping countries
-            # there would just fetch the same rows over again
-            section_countries = ["all-countries"] if section == "anime" else countries
-            for country in section_countries:
-                for genre in genres:
-                    if target is not None and fresh >= target:
-                        return gathered
-
+        # Genre first, section second. The other way round - all of tv, then all
+        # of movies - meant tv's genres filled the target on their own and the
+        # movie endpoints were never called at all, so a film never made it into
+        # the pool no matter how well it matched.
+        for genre in genres:
+            for section in sections:
+                # the anime endpoint has no country segment, so sweeping
+                # countries there would just refetch the same rows
+                section_countries = ["all-countries"] if section == "anime" else countries
+                for country in section_countries:
                     try:
                         results = client.genre_titles(
                             section, genre=genre, sort=sort, limit=per_genre,
@@ -322,6 +323,12 @@ def gather_candidates(
                         where = "" if country == "all-countries" else f" [{country}]"
                         suffix = f" ({new_here} unanswered)" if target is not None else ""
                         log(f"    {section}/{genre}{where} p{page}: {kept} new{suffix}")
+
+            # Only after every section has had its turn at this genre. Stopping
+            # mid-genre would bias the pool towards whichever section is listed
+            # first, which is the bug this ordering exists to avoid.
+            if target is not None and fresh >= target:
+                return gathered
 
         if exhausted:
             break  # every genre returned an empty page; there is no more

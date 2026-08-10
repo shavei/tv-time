@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--country", default="",
                         help="only titles released here, e.g. 'us' or 'us,gb' "
                              "(default: anywhere, which includes a lot of world drama)")
+    parser.add_argument("--sort", default="rank",
+                        help="how the catalogue is ordered before ranking: rank "
+                             "(all-time, default), popular-this-month, popular-today")
     parser.add_argument("--no-anime", action="store_true",
                         help="leave anime out of For You")
     parser.add_argument("--count", type=int, default=DEFAULT_TARGET,
@@ -243,6 +246,7 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
                 target=args.count if for_you else None,
                 countries=parse_countries(args.country),
                 sections=["tv", "movies"] if args.no_anime else None,
+                sort=args.sort,
             )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")

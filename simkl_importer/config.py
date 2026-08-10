@@ -197,6 +197,20 @@ class Store:
     def save_accepted(self, accepted: list) -> None:
         self._write_json(self.accepted_path, accepted)
 
+    def accepted_ids(self) -> set:
+        """Simkl IDs ever accepted in discovery.
+
+        This is the durable "you already answered yes to this" record: the
+        queue is emptied on send and the library cache can be up to a day
+        stale, so without this a title you just imported gets offered again.
+        """
+        ids = set()
+        for raw in self.load_accepted():
+            simkl = (raw.get("ids") or {}).get("simkl")
+            if simkl:
+                ids.add(str(simkl))
+        return ids
+
     def load_genre_cache(self) -> Dict[str, Any]:
         return self._read_json(self.genre_cache_path, {})
 
@@ -208,3 +222,11 @@ class Store:
 
     def save_library(self, library: Dict[str, Any]) -> None:
         self._write_json(self.library_path, library)
+
+    def invalidate_library(self) -> None:
+        """Drop the cached library - call after writing to the account."""
+        if self.library_path.exists():
+            try:
+                self.library_path.unlink()
+            except OSError:
+                pass

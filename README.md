@@ -40,6 +40,7 @@ handy — the script asks for them on first run and stores them in
 python -m simkl_importer                       # interactive menu
 python -m simkl_importer --file watched.csv    # parse a file and import it
 python -m simkl_importer --discover            # poster picker in your browser
+python -m simkl_importer --for-you             # one at a time, matched to your taste
 python -m simkl_importer --discover --tui     # stay in the terminal instead
 python -m simkl_importer --send                # push the saved queue
 python -m simkl_importer --file watched.csv --dry-run   # parse + match, post nothing
@@ -254,6 +255,39 @@ Each run tells you what it skipped and why:
 To deliberately revisit something: `--forget-rejected` clears the "no" list, and
 deleting `~/.simkl-importer/accepted.json` clears the "yes" list (your Simkl
 account still filters anything actually imported).
+
+## For You mode
+
+```bash
+python -m simkl_importer --for-you
+```
+
+Same idea as discovery, without the setup screen and without the grid. It reads
+your account, derives the genres from your taste profile, and then just starts
+showing you titles — one at a time, biggest match first:
+
+```
+┌───────────┐   ████████░░  84% match
+│           │   Severance
+│  poster   │   2022 · Drama, Mystery, Thriller · ★ 8.9
+│           │
+└───────────┘   [ Watched it ]  [ Want to watch ]  [ Not watched ]
+
+                Y watched · L want to watch · N not watched · ← back
+```
+
+Say **Watched it** and it asks how much right there (`all` by default, with
+`s1` / `s1-s2` / `s1-s3` shortcuts). Say **Want to watch** and it goes to Plan
+to Watch. Say **Not watched** and it is remembered as declined.
+
+`←` steps back if you misclick, and **Done — add them** finishes at any point.
+
+**Stopping early is safe.** Titles you never got to are left untouched — only
+the ones you actually answered are recorded, so the rest come round again next
+time. (In the grid this is different, and correctly so: every card was on
+screen, so anything left unselected genuinely means "not watched".)
+
+It is also menu option **4**, next to the grid at **3**.
 
 ## Rate limiting and quotas
 

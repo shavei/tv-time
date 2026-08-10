@@ -465,3 +465,31 @@ def test_page_offers_the_three_card_states():
     assert "plantowatch" in PAGE
     assert "want to watch it" in PAGE
     assert "Plan to Watch" in PAGE
+
+
+# ---------------------------------------------------------------- For You mode
+
+
+def test_prep_state_reports_the_mode(tmp_path):
+    grid = WebFlow(client=None, store=Store(tmp_path / "a"), queue=[])
+    foryou = WebFlow(client=None, store=Store(tmp_path / "b"), queue=[], mode="foryou")
+
+    assert grid.prep_state()["mode"] == "grid"
+    assert foryou.prep_state()["mode"] == "foryou"
+
+
+def test_page_has_a_one_at_a_time_screen():
+    from simkl_importer.web import PAGE
+
+    # the three answers, the keyboard shortcuts, and the auto-start
+    assert "Watched it" in PAGE and "Want to watch" in PAGE and "Not watched" in PAGE
+    assert "renderOne" in PAGE and "answerOne" in PAGE
+    assert "foryou" in PAGE
+
+
+def test_for_you_does_not_reject_titles_you_never_reached():
+    """Stopping early must not silently decline the rest of the list."""
+    from simkl_importer.web import PAGE
+
+    assert "mode !== 'foryou' || answered.has(c.id)" in PAGE
+    assert "answered.add(c.id)" in PAGE

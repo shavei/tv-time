@@ -37,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--file", type=Path, help="watched.csv / watched.json to import")
     parser.add_argument("--discover", action="store_true", help="run interactive discovery mode")
+    parser.add_argument("--for-you", dest="for_you", action="store_true",
+                        help="skip the setup screen: titles picked from your taste, one at a time")
     parser.add_argument("--send", action="store_true", help="send the saved queue and exit")
     parser.add_argument("--dry-run", action="store_true", help="do everything except the POST")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation before sending")
@@ -183,12 +185,15 @@ def make_renderer(args, client: SimklClient, store: Store) -> PosterRenderer:
     )
 
 
-def action_discover(args, client: SimklClient, store: Store, queue: List[WatchItem]) -> List[WatchItem]:
+def action_discover(args, client: SimklClient, store: Store, queue: List[WatchItem],
+                    for_you: bool = False) -> List[WatchItem]:
     if args.forget_rejected:
         store.save_rejected({})
         print("  Cleared the list of titles you previously passed on.")
+    for_you = for_you or args.for_you
     print("\n" + "=" * 60)
-    print("Discovery mode - let's work out what you have watched")
+    print("For You - titles matched to your taste" if for_you
+          else "Discovery mode - let's work out what you have watched")
     print("=" * 60)
 
     try:
@@ -220,6 +225,7 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
                 open_browser=not args.no_browser,
                 refresh_library=args.refresh_library,
                 use_taste=not args.no_taste,
+                mode="foryou" if for_you else "grid",
             )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")
@@ -292,11 +298,12 @@ def menu(args, client: SimklClient, store: Store) -> None:
         print("=" * 60)
         print("  1) Authenticate / re-authenticate")
         print("  2) Import from a watched.csv / watched.json")
-        print("  3) Discovery mode (answer yes/no about popular titles)")
-        print("  4) Review and send the queue to Simkl")
-        print("  5) Clear the queue")
-        print("  6) Quit")
-        choice = ask("\n  Choose [4]: ", "4")
+        print("  3) Discovery mode (a grid of posters to pick from)")
+        print("  4) For You (one at a time, matched to your taste)")
+        print("  5) Review and send the queue to Simkl")
+        print("  6) Clear the queue")
+        print("  7) Quit")
+        choice = ask("\n  Choose [5]: ", "5")
 
         try:
             if choice == "1":
@@ -307,13 +314,15 @@ def menu(args, client: SimklClient, store: Store) -> None:
             elif choice == "3":
                 queue = action_discover(args, client, store, queue)
             elif choice == "4":
+                queue = action_discover(args, client, store, queue, for_you=True)
+            elif choice == "5":
                 queue = action_send(args, client, store, queue)
                 save_queue(store, queue)
-            elif choice == "5":
+            elif choice == "6":
                 store.clear_queue()
                 queue = []
                 print("  Queue cleared.")
-            elif choice in ("6", "q", "quit", "exit"):
+            elif choice in ("7", "q", "quit", "exit"):
                 print("  Bye.")
                 return
             else:
@@ -338,14 +347,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        if args.file or args.discover or args.send:
+        if args.file or args.discover or args.for_you or args.send:
             queue = load_queue(store)
             if args.file:
                 queue = action_import_file(args, client, store, queue)
                 save_queue(store, queue)
-            if args.discover:
-                queue = action_discover(args, client, store, queue)
-            if args.send or args.file or args.discover:
+            if args.discover or args.for_you:
+                queue = action_discover(args, client, store, queue, for_you=args.for_you)
+            if args.send or args.file or args.discover or args.for_you:
                 queue = action_send(args, client, store, queue)
                 save_queue(store, queue)
             return 0

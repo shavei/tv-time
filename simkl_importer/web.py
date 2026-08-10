@@ -162,12 +162,16 @@ def _blank_profile():
 class WebFlow:
     """Drives setup -> build -> pick, with the browser polling for progress."""
 
-    def __init__(self, client, store, queue, refresh_library=False, use_taste=True):
+    def __init__(self, client, store, queue, refresh_library=False, use_taste=True,
+                 mode="grid"):
         self.client = client
         self.store = store
         self.queue = queue
         self.refresh_library = refresh_library
         self.use_taste = use_taste
+        # "grid" asks you to configure a sweep; "foryou" skips straight to
+        # titles picked from your profile, one at a time
+        self.mode = mode
 
         self.token = secrets.token_urlsafe(24)
         self.finished = threading.Event()
@@ -229,6 +233,7 @@ class WebFlow:
             "sections": SECTION_LABELS,
             "sorts": [{"value": v, "label": l} for v, l in SORT_CHOICES],
             "eras": [{"value": v, "label": l} for v, l in ERA_CHOICES],
+            "mode": self.mode,
             "log": self.log_lines(),
         }
 
@@ -377,11 +382,12 @@ def run_web_discovery(
     open_browser: bool = True,
     refresh_library: bool = False,
     use_taste: bool = True,
+    mode: str = "grid",
 ) -> List[WatchItem]:
     """Serve the whole flow, block until the browser submits, return the queue."""
     from .discovery import _remember_accepted
 
-    flow = WebFlow(client, store, queue, refresh_library, use_taste)
+    flow = WebFlow(client, store, queue, refresh_library, use_taste, mode=mode)
     handler = type("BoundHandler", (Handler,), {"flow": flow})
     server = ThreadingHTTPServer((BIND_HOST, port), handler)
     url = f"http://{BIND_HOST}:{server.server_address[1]}/?token={flow.token}"
@@ -392,6 +398,8 @@ def run_web_discovery(
     opened = open_in_browser(url) if open_browser else False
 
     print("\n" + "=" * 68)
+    if mode == "foryou":
+        print("  For You - titles picked from your taste, one at a time.")
     if opened:
         print("  Opening in your browser. If nothing appeared, paste this in:")
     else:
@@ -546,6 +554,30 @@ PAGE = r"""<!doctype html>
     vertical-align: -2px; margin-right: 7px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .one { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; max-width: 900px; }
+  .one .art {
+    width: 280px; aspect-ratio: 2/3; border-radius: 14px; overflow: hidden;
+    background: var(--line); flex: 0 0 auto; box-shadow: 0 4px 20px var(--shadow);
+    position: relative;
+  }
+  .one .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .one .side { flex: 1 1 300px; min-width: 260px; }
+  .one h2 { font-size: 27px; margin: 4px 0 6px; line-height: 1.2; }
+  .one .facts { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  .bar {
+    height: 7px; border-radius: 4px; background: var(--line);
+    overflow: hidden; margin: 0 0 20px; max-width: 260px;
+  }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .actions button { padding: 12px 20px; }
+  .actions .later { background: var(--later); color: var(--later-ink); }
+  .inline { margin: 4px 0 18px; }
+  .keyhint { color: var(--muted); font-size: 12.5px; }
+  .keyhint kbd {
+    border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px;
+    font: 11.5px ui-monospace, Menlo, Consolas, monospace; margin: 0 2px;
+  }
   .hide { display: none !important; }
 </style>
 </head>
@@ -609,6 +641,33 @@ PAGE = r"""<!doctype html>
     <div class="logbox" id="log"></div>
   </section>
 
+  <section id="one" class="hide">
+    <p class="muted" id="oneSkipLine"></p>
+    <div class="one">
+      <div class="art" id="oneArt"></div>
+      <div class="side">
+        <div class="bar" id="oneBar"><i style="width:0%"></i></div>
+        <h2 id="oneTitle"></h2>
+        <p class="facts" id="oneFacts"></p>
+        <div class="actions">
+          <button id="aYes">Watched it</button>
+          <button class="later" id="aLater">Want to watch</button>
+          <button class="ghost" id="aNo">Not watched</button>
+        </div>
+        <div class="inline hide" id="oneProgress">
+          <label class="muted" for="oneSpec">How much?</label><br>
+          <span id="onePresets"></span>
+          <input type="text" id="oneSpec" value="all" size="16">
+          <button id="oneSave">Save</button>
+        </div>
+        <p class="keyhint">
+          <kbd>Y</kbd> watched · <kbd>L</kbd> want to watch · <kbd>N</kbd> not watched ·
+          <kbd>←</kbd> back
+        </p>
+      </div>
+    </div>
+  </section>
+
   <section id="pick" class="hide">
     <p class="muted" id="skipLine"></p>
     <p class="legend">
@@ -649,9 +708,14 @@ let chosenSections = new Set(['tv', 'movies', 'anime']);
 let chosenGenres = new Set();
 let chosenSort = 'rank';
 let chosenEra = 'all-years';
+let mode = 'grid';
+let cursor = 0;
+// ids actually put in front of you and answered - in For You you can stop
+// early, and titles you never reached must not be recorded as declined
+let answered = new Set();
 
 function show(name) {
-  ['setup', 'building', 'pick', 'detail', 'done'].forEach(s =>
+  ['setup', 'building', 'one', 'pick', 'detail', 'done'].forEach(s =>
     $(s).classList.toggle('hide', s !== name));
   step = name;
 }
@@ -726,22 +790,32 @@ function renderSetup(prep) {
 
 async function pollPrep() {
   const prep = await (await fetch(api('/api/prep'))).json();
+  mode = prep.mode || 'grid';
   if (!prep.ready) { setTimeout(pollPrep, 600); return; }
+  if (mode === 'foryou') {
+    // nothing to configure - the profile picks the genres
+    $('next').classList.add('hide');
+    return startBuild();
+  }
   renderSetup(prep);
 }
 
 // ---------------------------------------------------------------- building
 
 async function startBuild() {
-  const body = {
-    sections: Array.from(chosenSections),
-    genres: Array.from(chosenGenres),
-    favourites: $('favourites').value.split(',').map(s => s.trim()).filter(Boolean),
-    per_genre: parseInt($('perGenre').value, 10) || 30,
-    trending: $('trending').checked,
-    sort: chosenSort,
-    year: chosenEra,
-  };
+  const body = mode === 'foryou'
+    // empty genres means "use my taste profile", which the server resolves
+    ? { sections: ['tv', 'movies', 'anime'], genres: [], favourites: [],
+        per_genre: 40, trending: false, sort: 'rank', year: 'all-years' }
+    : {
+        sections: Array.from(chosenSections),
+        genres: Array.from(chosenGenres),
+        favourites: $('favourites').value.split(',').map(s => s.trim()).filter(Boolean),
+        per_genre: parseInt($('perGenre').value, 10) || 30,
+        trending: $('trending').checked,
+        sort: chosenSort,
+        year: chosenEra,
+      };
   if (!body.sections.length) {
     return showErrors(['Pick at least one of TV shows, Movies or Anime.']);
   }
@@ -789,11 +863,117 @@ async function pollBuild() {
     $('skipLine').textContent =
       'Skipped ' + state.skipped + ' you have seen before: ' + state.skip_reasons.join(', ') + '.';
   }
+  if (mode === 'foryou') {
+    if (state.skipped) {
+      $('oneSkipLine').textContent =
+        'Skipped ' + state.skipped + ' you have seen before: ' + state.skip_reasons.join(', ') + '.';
+    }
+    $('next').classList.remove('hide');
+    $('next').textContent = 'Done - add them';
+    cursor = 0;
+    show('one');
+    return renderOne();
+  }
   $('heading').textContent = 'Click everything you have watched';
   $('filter').classList.remove('hide');
   $('next').textContent = 'Continue';
   show('pick');
   render();
+}
+
+// ----------------------------------------------------------------- for you
+
+function renderOne() {
+  if (cursor >= candidates.length) return finishOne();
+  const c = candidates[cursor];
+
+  $('heading').textContent = 'Have you watched this?';
+  const { watched, later } = counts();
+  $('count').textContent =
+    (cursor + 1) + ' of ' + candidates.length
+    + (watched || later ? '  ·  ' + watched + ' watched, ' + later + ' to watch later' : '');
+
+  const art = $('oneArt');
+  art.textContent = '';
+  if (c.poster) {
+    const img = document.createElement('img');
+    img.src = c.poster; img.alt = ''; img.referrerPolicy = 'no-referrer';
+    img.onerror = () => { img.remove(); art.appendChild(placeholder(c)); };
+    art.appendChild(img);
+  } else {
+    art.appendChild(placeholder(c));
+  }
+
+  $('oneTitle').textContent = c.title;
+  const facts = [];
+  if (c.year) facts.push(c.year);
+  if (c.genres.length) facts.push(c.genres.join(', '));
+  if (c.rating) facts.push('★ ' + c.rating);
+  if (c.match !== null && c.match !== undefined) facts.push(c.match + '% match');
+  $('oneFacts').textContent = facts.join('  ·  ');
+  $('oneBar').firstElementChild.style.width =
+    Math.round(100 * cursor / Math.max(1, candidates.length)) + '%';
+
+  $('oneProgress').classList.add('hide');
+  $('aYes').classList.toggle('hide', false);
+}
+
+function answerOne(intent) {
+  const c = candidates[cursor];
+  if (!c) return;
+  answered.add(c.id);
+  if (intent) picked.set(c.id, intent); else picked.delete(c.id);
+  cursor += 1;
+  renderOne();
+}
+
+function askHowMuch() {
+  const c = candidates[cursor];
+  if (!c) return;
+  if (c.is_movie) return answerOne('watched');
+
+  const presets = $('onePresets');
+  presets.textContent = '';
+  ['all', 's1', 's1-s2', 's1-s3'].forEach(preset => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = preset;
+    b.onclick = () => { $('oneSpec').value = preset; };
+    presets.appendChild(b);
+  });
+  $('oneSpec').value = 'all';
+  $('oneSpec').dataset.for = c.id;
+  $('oneProgress').classList.remove('hide');
+  $('oneSpec').focus();
+  $('oneSpec').select();
+}
+
+function saveHowMuch() {
+  const c = candidates[cursor];
+  if (!c) return;
+  // stash the answer where the commit step already looks for it
+  let hidden = document.querySelector('input[data-for="' + CSS.escape(c.id) + '"][type=hidden]');
+  if (!hidden) {
+    hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.for = c.id;
+    document.body.appendChild(hidden);
+  }
+  hidden.value = $('oneSpec').value || 'all';
+  answerOne('watched');
+}
+
+function finishOne() {
+  $('heading').textContent = 'That is everything';
+  $('count').textContent = '';
+  const { watched } = counts();
+  if (watched) {
+    // shows still need "how much" only if they were answered without it
+    const pending = candidates.filter(c =>
+      picked.get(c.id) === 'watched' && !c.is_movie
+      && !document.querySelector('input[data-for="' + CSS.escape(c.id) + '"]'));
+    if (pending.length) return showDetail();
+  }
+  commit();
 }
 
 // -------------------------------------------------------------------- pick
@@ -970,7 +1150,11 @@ async function commit() {
     const field = document.querySelector('input[data-for="' + CSS.escape(c.id) + '"]');
     return { id: c.id, intent: 'watched', progress: field ? field.value : 'all' };
   });
-  const rejected = candidates.filter(c => !picked.has(c.id)).map(c => c.id);
+  // in the grid every card was on screen, so anything unpicked is a "no";
+  // one at a time, only the ones you actually answered count
+  const rejected = candidates
+    .filter(c => !picked.has(c.id) && (mode !== 'foryou' || answered.has(c.id)))
+    .map(c => c.id);
 
   $('next').disabled = true;
   const data = await (await fetch(api('/api/commit'), {
@@ -996,12 +1180,32 @@ async function commit() {
 
 $('next').onclick = () => {
   if (step === 'setup') return startBuild();
+  if (step === 'one') return finishOne();
   if (step === 'pick') return picked.size ? showDetail() : commit();
-  if (step === 'detail' && counts().watched === 0) return commit();
   if (step === 'detail') return commit();
 };
 $('back').onclick = () => { if (step === 'detail') backToPick(); };
 $('filter').oninput = render;
+
+$('aYes').onclick = askHowMuch;
+$('aLater').onclick = () => answerOne('plantowatch');
+$('aNo').onclick = () => answerOne(null);
+$('oneSave').onclick = saveHowMuch;
+$('oneSpec').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveHowMuch(); } };
+
+document.addEventListener('keydown', (e) => {
+  if (step !== 'one') return;
+  if (e.target.tagName === 'INPUT') return;
+  const key = e.key.toLowerCase();
+  if (key === 'y') { e.preventDefault(); askHowMuch(); }
+  else if (key === 'l') { e.preventDefault(); answerOne('plantowatch'); }
+  else if (key === 'n') { e.preventDefault(); answerOne(null); }
+  else if (e.key === 'ArrowLeft' && cursor > 0) {
+    e.preventDefault();
+    cursor -= 1;
+    renderOne();
+  }
+});
 
 pollPrep();
 </script>

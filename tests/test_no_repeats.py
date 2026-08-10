@@ -159,3 +159,20 @@ def test_accepted_file_is_append_only_across_runs(store):
 
     assert store.accepted_ids() == {"1", "2"}
     assert len(json.loads(store.accepted_path.read_text())) == 2
+
+
+def test_planned_titles_count_as_answered_too(store):
+    """Adding something to Plan to Watch must not leave it in the pool."""
+    from simkl_importer.models import PLAN, TV, WatchItem
+
+    planned = WatchItem(title="Dune", media_type=TV, ids={"simkl": 99}, intent=PLAN)
+    store.save_accepted([planned.to_dict()])
+
+    assert store.accepted_ids() == {"99"}
+
+    kept, counts = filter_entries(
+        [build_entry(99, "Dune"), build_entry(7, "New Thing")],
+        library={}, rejected={}, already_accepted=store.accepted_ids(), queued_keys=set(),
+    )
+    assert [e["candidate"]["title"] for e in kept] == ["New Thing"]
+    assert counts["yes"] == 1

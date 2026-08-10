@@ -643,3 +643,53 @@ def test_detail_returns_a_cleaned_overview(tmp_path, session):
 
     overview = flow.detail("1")["overview"]
     assert overview == 'Line one. Line two with "quotes".'
+
+
+# ------------------------------------------------------- region and sections
+
+
+def test_prep_state_offers_countries_and_echoes_the_choices(tmp_path):
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[],
+                   mode="foryou", countries=["us", "gb"], sections=["tv", "movies"])
+    state = flow.prep_state()
+
+    values = {c["value"] for c in state["countries"]}
+    assert {"all-countries", "us", "gb", "jp", "in"} <= values
+    assert state["countries"][0]["value"] == "all-countries"
+    # For You has no setup screen, so the page needs to be told what to use
+    assert state["picked_countries"] == ["us", "gb"]
+    assert state["picked_sections"] == ["tv", "movies"]
+
+
+def test_defaults_stay_wide_open(tmp_path):
+    state = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[]).prep_state()
+    assert state["picked_countries"] == ["all-countries"]
+    assert state["picked_sections"] == ["tv", "movies", "anime"]
+
+
+def test_build_passes_countries_through(tmp_path, monkeypatch):
+    import simkl_importer.discovery as discovery
+    from simkl_importer.taste import TasteProfile
+
+    seen = {}
+
+    def capture(client, store, queue, prepared, **kwargs):
+        seen.update(kwargs)
+        return {"ranked": [], "profile": TasteProfile(), "rejected": {},
+                "queued_keys": set(), "skipped": 0, "skip_reasons": []}
+
+    monkeypatch.setattr(discovery, "build_session", capture)
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[])
+    flow.prepared = {"library": {}, "profile": TasteProfile(), "suggested": []}
+    flow._build({"sections": ["tv"], "countries": ["us", "gb"]})
+
+    assert seen["countries"] == ["us", "gb"]
+
+
+def test_page_has_a_region_picker():
+    from simkl_importer.web import PAGE
+
+    assert "Where from" in PAGE
+    assert "forYouCountries" in PAGE
+    # "Anywhere" is the absence of a filter and must not coexist with one
+    assert "chosenCountries.clear()" in PAGE

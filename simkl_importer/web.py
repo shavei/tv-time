@@ -195,7 +195,7 @@ class WebFlow:
     """Drives setup -> build -> pick, with the browser polling for progress."""
 
     def __init__(self, client, store, queue, refresh_library=False, use_taste=True,
-                 mode="grid", target=None):
+                 mode="grid", target=None, countries=None, sections=None):
         self.client = client
         self.store = store
         self.queue = queue
@@ -206,6 +206,10 @@ class WebFlow:
         self.mode = mode
         # how many unanswered titles a For You run aims to find
         self.target = target
+        # where things were made, and which of tv/movies/anime to sweep -
+        # For You has no setup screen, so these come from the command line
+        self.countries = countries or ["all-countries"]
+        self.sections = sections or ["tv", "movies", "anime"]
 
         self.token = secrets.token_urlsafe(24)
         self.finished = threading.Event()
@@ -256,7 +260,9 @@ class WebFlow:
             self.log(f"  Could not load your taste profile: {exc}")
 
     def prep_state(self) -> Dict[str, Any]:
-        from .discovery import ERA_CHOICES, SORT_CHOICES, SUGGESTED_GENRES
+        from .discovery import (
+            COUNTRY_CHOICES, ERA_CHOICES, SORT_CHOICES, SUGGESTED_GENRES,
+        )
 
         return {
             "ready": self.prepared is not None or bool(self.prep_error),
@@ -267,6 +273,9 @@ class WebFlow:
             "sections": SECTION_LABELS,
             "sorts": [{"value": v, "label": l} for v, l in SORT_CHOICES],
             "eras": [{"value": v, "label": l} for v, l in ERA_CHOICES],
+            "countries": [{"value": v, "label": l} for v, l in COUNTRY_CHOICES],
+            "picked_countries": self.countries,
+            "picked_sections": self.sections,
             "mode": self.mode,
             "target": self.target,
             "log": self.log_lines(),
@@ -298,6 +307,7 @@ class WebFlow:
                 include_trending=bool(options.get("trending")),
                 sort=str(options.get("sort") or "rank"),
                 year=str(options.get("year") or "all-years"),
+                countries=[c for c in (options.get("countries") or []) if str(c).strip()] or None,
                 target=self.target if self.mode == "foryou" else None,
                 log=self.log,
             )
@@ -458,12 +468,14 @@ def run_web_discovery(
     use_taste: bool = True,
     mode: str = "grid",
     target: Optional[int] = None,
+    countries: Optional[List[str]] = None,
+    sections: Optional[List[str]] = None,
 ) -> List[WatchItem]:
     """Serve the whole flow, block until the browser submits, return the queue."""
     from .discovery import _remember_accepted
 
     flow = WebFlow(client, store, queue, refresh_library, use_taste,
-                   mode=mode, target=target)
+                   mode=mode, target=target, countries=countries, sections=sections)
     handler = type("BoundHandler", (Handler,), {"flow": flow})
     server = ThreadingHTTPServer((BIND_HOST, port), handler)
     url = f"http://{BIND_HOST}:{server.server_address[1]}/?token={flow.token}"
@@ -696,6 +708,13 @@ PAGE = r"""<!doctype html>
     </div>
 
     <div class="field">
+      <label>Where from</label>
+      <div class="chips" id="countries"></div>
+      <p class="muted">Leaving this on Anywhere pulls in the whole world's
+         catalogue, which is a lot of drama from places you may not watch.</p>
+    </div>
+
+    <div class="field">
       <label>Era</label>
       <div class="chips" id="eras"></div>
       <p class="muted">Narrow it to when you were actually watching.</p>
@@ -790,6 +809,9 @@ let chosenSections = new Set(['tv', 'movies', 'anime']);
 let chosenGenres = new Set();
 let chosenSort = 'rank';
 let chosenEra = 'all-years';
+let chosenCountries = new Set(['all-countries']);
+let forYouCountries = ['all-countries'];
+let forYouSections = ['tv', 'movies', 'anime'];
 let mode = 'grid';
 let cursor = 0;
 // ids actually put in front of you and answered - in For You you can stop
@@ -857,6 +879,19 @@ function renderSetup(prep) {
       active => active ? chosenGenres.add(name) : chosenGenres.delete(name)));
   });
 
+  const countries = $('countries');
+  countries.textContent = '';
+  prep.countries.forEach(opt => {
+    countries.appendChild(chip(opt.label, chosenCountries.has(opt.value), on => {
+      // "Anywhere" is the absence of a filter, so it cannot coexist with one
+      if (on && opt.value === 'all-countries') chosenCountries.clear();
+      else if (on) chosenCountries.delete('all-countries');
+      on ? chosenCountries.add(opt.value) : chosenCountries.delete(opt.value);
+      if (!chosenCountries.size) chosenCountries.add('all-countries');
+      renderSetup(prep);
+    }));
+  });
+
   radioChips($('eras'), prep.eras, chosenEra, v => { chosenEra = v; });
   radioChips($('sorts'), prep.sorts, chosenSort, v => { chosenSort = v; });
 
@@ -873,6 +908,8 @@ function renderSetup(prep) {
 async function pollPrep() {
   const prep = await (await fetch(api('/api/prep'))).json();
   mode = prep.mode || 'grid';
+  if (prep.picked_countries) forYouCountries = prep.picked_countries;
+  if (prep.picked_sections) forYouSections = prep.picked_sections;
   if (!prep.ready) { setTimeout(pollPrep, 600); return; }
   if (mode === 'foryou') {
     // nothing to configure - the profile picks the genres
@@ -889,8 +926,9 @@ async function startBuild() {
     // empty genres means "use my taste profile", which the server resolves;
     // ranking still puts the closest matches first, so a wide sweep costs
     // nothing in relevance and gives the pager room to find fresh titles
-    ? { sections: ['tv', 'movies', 'anime'], genres: [], favourites: [],
-        per_genre: 50, trending: false, sort: 'rank', year: 'all-years' }
+    ? { sections: forYouSections, genres: [], favourites: [],
+        per_genre: 50, trending: false, sort: 'rank', year: 'all-years',
+        countries: forYouCountries }
     : {
         sections: Array.from(chosenSections),
         genres: Array.from(chosenGenres),
@@ -899,6 +937,7 @@ async function startBuild() {
         trending: $('trending').checked,
         sort: chosenSort,
         year: chosenEra,
+        countries: Array.from(chosenCountries),
       };
   if (!body.sections.length) {
     return showErrors(['Pick at least one of TV shows, Movies or Anime.']);

@@ -219,6 +219,7 @@ class SimklClient:
         limit: int = 20,
         page: int = 1,
         year: str = "all-years",
+        country: str = "all-countries",
     ) -> list:
         """Titles for a genre.
 
@@ -226,17 +227,23 @@ class SimklClient:
         simkl.com, e.g. /tv/genres/drama/all-types/all-countries/all-networks/
         2010s/rank
 
+        `country` is where it was released - "us", "gb" and so on. Left wide
+        open you get the whole world's catalogue, which is a lot of drama from
+        places you may not watch.
+
         `sort` defaults to `rank` - Simkl's all-time ranking. The alternatives
         (`popular-this-month`, `popular-today`) return whatever is out *now*,
         which is the wrong end of the catalogue when the point is to remember
         what you watched years ago.
         """
         if section == "tv":
-            path = f"/tv/genres/{genre}/all-types/all-countries/all-networks/{year}/{sort}"
+            path = f"/tv/genres/{genre}/all-types/{country}/all-networks/{year}/{sort}"
         elif section == "anime":
+            # the anime path has no country segment - anime is Japanese by
+            # definition as far as this endpoint is concerned
             path = f"/anime/genres/{genre}/all-types/all-networks/{year}/{sort}"
         else:
-            path = f"/movies/genres/{genre}/all-types/all-countries/{year}/{sort}"
+            path = f"/movies/genres/{genre}/all-types/{country}/{year}/{sort}"
         result = self.get(
             path,
             params={"page": page, "limit": limit, "extended": "title,genres"},

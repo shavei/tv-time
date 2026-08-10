@@ -272,9 +272,12 @@ class PagingClient:
         self.per_page = per_page
         self.next_id = start
         self.calls = []
+        self.countries = []
 
-    def genre_titles(self, section, genre="all", sort="rank", limit=20, page=1, year="all-years"):
+    def genre_titles(self, section, genre="all", sort="rank", limit=20, page=1,
+                     year="all-years", country="all-countries"):
         self.calls.append((section, genre, page))
+        self.countries.append(country)
         if page > self.pages:
             return []
         out = []
@@ -582,3 +585,56 @@ def test_diluting_a_match_with_unrelated_genres_lowers_it():
     diluted = match_fraction({"genres": ["Crime", "Thriller", "Romance", "Musical"]}, profile)
 
     assert diluted < focused
+
+
+# ------------------------------------------------------------ country filter
+
+
+def test_country_lands_in_the_genre_path():
+    from simkl_importer.client import SimklClient
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "tv", genre="drama", country="us")
+    assert client.paths == ["/tv/genres/drama/all-types/us/all-networks/all-years/rank"]
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "movies", genre="crime", country="gb")
+    assert client.paths == ["/movies/genres/crime/all-types/gb/all-years/rank"]
+
+
+def test_anime_has_no_country_segment_to_fill():
+    from simkl_importer.client import SimklClient
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "anime", genre="action", country="us")
+    assert "us" not in client.paths[0]
+
+
+def test_gathering_sweeps_each_requested_country():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=3, per_page=5)
+    gather_candidates(client, ["tv"], ["drama"], per_genre=5,
+                      countries=["us", "gb"], log=lambda *_: None)
+
+    assert sorted(set(client.countries)) == ["gb", "us"]
+
+
+def test_anime_is_swept_once_however_many_countries_are_asked_for():
+    """The anime endpoint ignores country, so repeating it just refetches."""
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=3, per_page=5)
+    gather_candidates(client, ["anime"], ["action"], per_genre=5,
+                      countries=["us", "gb", "ca"], log=lambda *_: None)
+
+    assert client.countries == ["all-countries"]
+    assert len(client.calls) == 1
+
+
+def test_no_country_means_no_filter():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=2, per_page=5)
+    gather_candidates(client, ["tv"], ["drama"], per_genre=5, log=lambda *_: None)
+    assert client.countries == ["all-countries"]

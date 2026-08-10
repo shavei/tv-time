@@ -67,6 +67,7 @@ class Store:
         self.library_path = self.home / "library.json"
         self.rejected_path = self.home / "rejected.json"
         self.genre_cache_path = self.home / "genre-cache.json"
+        self.detail_cache_path = self.home / "detail-cache.json"
         self.accepted_path = self.home / "accepted.json"
         self.poster_dir = self.home / "posters"
 
@@ -210,6 +211,13 @@ class Store:
             if simkl:
                 ids.add(str(simkl))
         return ids
+
+    def load_detail_cache(self) -> Dict[str, Any]:
+        """Overview/genres per Simkl ID. Titles do not change, so this never expires."""
+        return self._read_json(self.detail_cache_path, {})
+
+    def save_detail_cache(self, cache: Dict[str, Any]) -> None:
+        self._write_json(self.detail_cache_path, cache)
 
     def load_genre_cache(self) -> Dict[str, Any]:
         return self._read_json(self.genre_cache_path, {})

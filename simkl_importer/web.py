@@ -82,7 +82,8 @@ def candidate_payload(entry: Dict[str, Any], match: float, item: WatchItem, show
         "is_movie": item.is_movie,
         "genres": [g.title() for g in candidate_genres(candidate)],
         "rating": candidate_rating(candidate),
-        "match": round(match) if show_match else None,
+        # None means "cannot say" - no profile yet, or no genres on the title
+        "match": round(match) if (show_match and match is not None) else None,
         "bucket": entry.get("genre", ""),
         # full-quality poster straight from Simkl's CDN, fetched by the browser
         "poster": poster_url(item.poster, size="_ca", width=300) if item.poster else "",
@@ -302,6 +303,42 @@ class WebFlow:
         self.cancelled = True
         self.finished.set()
 
+    # ------------------------------------------------------------ title detail
+
+    def detail(self, simkl_id: str) -> Dict[str, Any]:
+        """Overview and genres for one title, fetched on demand.
+
+        A hundred summaries up front would be a hundred requests for cards you
+        may never reach, so this is per-card and cached on disk forever -
+        a title's synopsis does not change.
+        """
+        from .discovery import SUMMARY_SECTION_FOR
+
+        key = str(simkl_id)
+        cache = self.store.load_detail_cache()
+        if key in cache:
+            return cache[key]
+
+        item = self.session.items.get(key) if self.session else None
+        if item is None:
+            return {}
+        try:
+            summary = self.client.summary(SUMMARY_SECTION_FOR(item.media_type), key) or {}
+        except Exception as exc:
+            self.log(f"  Could not load details for {item.label()}: {exc}")
+            return {}
+
+        detail = {
+            "overview": (summary.get("overview") or "").strip(),
+            "genres": [str(g) for g in (summary.get("genres") or [])],
+            "runtime": summary.get("runtime"),
+            "network": summary.get("network") or summary.get("country") or "",
+            "certification": summary.get("certification") or "",
+        }
+        cache[key] = detail
+        self.store.save_detail_cache(cache)
+        return detail
+
 
 class Handler(BaseHTTPRequestHandler):
     flow: WebFlow = None  # bound in run_web_discovery
@@ -351,6 +388,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self.flow.prep_state())
         if parsed.path == "/api/build":
             return self._json(200, self.flow.build_state())
+        if parsed.path == "/api/detail":
+            return self._json(200, self.flow.detail(query.get("id", [""])[0]))
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -569,7 +608,12 @@ PAGE = r"""<!doctype html>
   .one .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .one .side { flex: 1 1 300px; min-width: 260px; }
   .one h2 { font-size: 27px; margin: 4px 0 6px; line-height: 1.2; }
-  .one .facts { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  .one .facts { color: var(--muted); font-size: 14px; margin-bottom: 14px; }
+  .one .overview {
+    font-size: 14.5px; line-height: 1.65; margin: 0 0 22px; max-width: 60ch;
+    min-height: 3.3em; color: var(--ink);
+  }
+  .one .overview.pending { color: var(--muted); font-style: italic; }
   .bar {
     height: 7px; border-radius: 4px; background: var(--line);
     overflow: hidden; margin: 0 0 20px; max-width: 260px;
@@ -655,6 +699,7 @@ PAGE = r"""<!doctype html>
         <div class="bar" id="oneBar"><i style="width:0%"></i></div>
         <h2 id="oneTitle"></h2>
         <p class="facts" id="oneFacts"></p>
+        <p class="overview" id="oneOverview"></p>
         <div class="actions">
           <button id="aYes">Watched it</button>
           <button class="later" id="aLater">Want to watch</button>
@@ -913,17 +958,58 @@ function renderOne() {
   }
 
   $('oneTitle').textContent = c.title;
+  paintFacts(c);
+  loadDetail(c);
+  prefetchDetail(candidates[cursor + 1]);
+  $('oneBar').firstElementChild.style.width =
+    Math.round(100 * cursor / Math.max(1, candidates.length)) + '%';
+
+  $('oneProgress').classList.add('hide');
+  $('aYes').classList.toggle('hide', false);
+}
+
+const detailCache = new Map();
+
+function paintFacts(c) {
   const facts = [];
   if (c.year) facts.push(c.year);
   if (c.genres.length) facts.push(c.genres.join(', '));
   if (c.rating) facts.push('★ ' + c.rating);
   if (c.match !== null && c.match !== undefined) facts.push(c.match + '% match');
   $('oneFacts').textContent = facts.join('  ·  ');
-  $('oneBar').firstElementChild.style.width =
-    Math.round(100 * cursor / Math.max(1, candidates.length)) + '%';
+}
 
-  $('oneProgress').classList.add('hide');
-  $('aYes').classList.toggle('hide', false);
+async function fetchDetail(c) {
+  if (!c) return null;
+  if (detailCache.has(c.id)) return detailCache.get(c.id);
+  const pending = fetch(api('/api/detail') + '&id=' + encodeURIComponent(c.id))
+    .then(r => r.json())
+    .catch(() => ({}));
+  detailCache.set(c.id, pending);
+  return pending;
+}
+
+function prefetchDetail(c) { if (c) fetchDetail(c); }
+
+async function loadDetail(c) {
+  const box = $('oneOverview');
+  box.className = 'overview pending';
+  box.textContent = 'Loading summary…';
+
+  const detail = await fetchDetail(c);
+  // the card may have moved on while that was in flight
+  if (!candidates[cursor] || candidates[cursor].id !== c.id) return;
+
+  box.className = 'overview';
+  box.textContent = (detail && detail.overview)
+    ? detail.overview
+    : 'No summary available for this one.';
+
+  // the browse endpoints often omit genres; the detail call has them
+  if (detail && detail.genres && detail.genres.length && !c.genres.length) {
+    c.genres = detail.genres;
+    paintFacts(c);
+  }
 }
 
 function answerOne(intent) {

@@ -203,6 +203,25 @@ ask for when an app fetches images itself. `--no-posters` turns them off,
 Either way the queue is written to disk after every answer, so a long session
 survives Ctrl-C — resume with `--send`.
 
+### What the match percentage means
+
+It is the share of a title's genres that are ones you actually watch, weighted
+by how much you watch them and scaled against your strongest genre. It is
+**absolute**: a title made of your favourite genres approaches 100%, and one
+sharing nothing with your profile reads 0% — even if it happens to be the best
+of a weak batch.
+
+That distinction matters. An earlier version stretched scores across the pool,
+so the top item always showed 100% and the bottom always 0% no matter how
+badly everything fitted, which made unrelated titles look like strong matches.
+
+Rating and era only break ties between titles that match you equally well —
+they can never push something above a title that actually fits your taste.
+
+The percentage is hidden entirely when there is nothing to go on: no profile
+yet, or no genres known for the title. If a whole batch comes back under 40%
+the sweep says so rather than pretending.
+
 ### Taste profile
 
 Every title you accept is recorded in `~/.simkl-importer/accepted.json` — which,
@@ -275,6 +294,11 @@ showing you titles — one at a time, biggest match first:
 
                 Y watched · L want to watch · N not watched · ← back
 ```
+
+Each card carries a short synopsis, fetched for that title as you reach it and
+cached forever afterwards — a hundred summaries up front would be a hundred
+requests for cards you may never see. The next card's is prefetched while you
+read, so it is usually there before you are.
 
 Say **Watched it** and it asks how much right there (`all` by default, with
 `s1` / `s1-s2` / `s1-s3` shortcuts). Say **Want to watch** and it goes to Plan

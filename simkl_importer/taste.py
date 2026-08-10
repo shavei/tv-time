@@ -20,10 +20,10 @@ SUMMARY_SECTION = {TV: "tv", MOVIE: "movies", ANIME: "anime"}
 
 # a rejected title says less than an accepted one, but it does say something
 REJECT_WEIGHT = 0.6
-# how much the Simkl/IMDb rating nudges the ranking, versus genre affinity
-RATING_WEIGHT = 0.15
-# decade affinity contribution
-ERA_WEIGHT = 0.20
+# Tie-breakers only. Both must stay well under 1.0, which is what a perfect
+# genre match scores, so neither can outrank actually matching your taste.
+RATING_WEIGHT = 0.08
+ERA_WEIGHT = 0.10
 
 
 def normalize_genre(genre: Any) -> str:
@@ -212,18 +212,52 @@ def genre_idf(entries: Sequence[Dict[str, Any]]) -> Dict[str, float]:
     }
 
 
+def match_fraction(candidate: Dict[str, Any], profile: TasteProfile) -> Optional[float]:
+    """How well this title matches the profile, 0..1, on its own terms.
+
+    Deliberately *absolute*. Ranking positions are relative by nature, but a
+    percentage shown to a person is read as "how much is this me?" - so a title
+    sharing nothing with your profile has to come out near zero even when it is
+    the best of a bad pool, and only something made of your strongest genres
+    can approach 100.
+
+    None means we cannot say: no profile yet, or no genres on the title.
+    """
+    if profile.empty:
+        return None
+    genres = candidate_genres(candidate)
+    if not genres:
+        return None
+
+    affinity = profile.genre_affinity()
+    strongest = max(affinity.values(), default=0.0)
+    if strongest <= 0:
+        return None
+
+    # average affinity across the title's genres, scaled against your best one
+    per_genre = [max(0.0, affinity.get(genre, 0.0)) for genre in genres]
+    return max(0.0, min(1.0, (sum(per_genre) / len(per_genre)) / strongest))
+
+
 def score_candidate(
     candidate: Dict[str, Any],
     profile: TasteProfile,
     idf: Dict[str, float],
 ) -> float:
-    genres = candidate_genres(candidate)
-    affinity = profile.genre_affinity()
+    """Ordering score: the match, nudged by rating and era to break ties.
 
-    genre_score = 0.0
-    if genres:
-        total = sum(affinity.get(genre, 0.0) * idf.get(genre, 1.0) for genre in genres)
-        genre_score = total / math.sqrt(len(genres))
+    The nudges are deliberately small - two titles that match you equally well
+    should be separated by how good they are, but a better rating must never
+    push a title above one that actually fits your taste.
+    """
+    match = match_fraction(candidate, profile)
+    base = 0.0 if match is None else match
+
+    # distinctive genres count for a little more than ubiquitous ones
+    genres = candidate_genres(candidate)
+    if genres and match:
+        rarity = sum(idf.get(genre, 1.0) for genre in genres) / len(genres)
+        base *= 1.0 + 0.10 * math.tanh(rarity - 1.0)
 
     rating = candidate_rating(candidate)
     rating_score = ((rating - 6.0) / 4.0) if rating else 0.0
@@ -234,7 +268,7 @@ def score_candidate(
         top = max(profile.decades.values())
         era_score = profile.decades.get(era, 0) / top if top else 0.0
 
-    return genre_score + RATING_WEIGHT * rating_score + ERA_WEIGHT * era_score
+    return base + RATING_WEIGHT * rating_score + ERA_WEIGHT * era_score
 
 
 def rank_entries(
@@ -252,10 +286,11 @@ def rank_entries(
         return [(entry, 0.0) for entry, _ in scored]
 
     scored.sort(key=lambda pair: pair[1], reverse=True)
-    highest = scored[0][1]
-    lowest = scored[-1][1]
-    span = (highest - lowest) or 1.0
-    return [
-        (entry, 100.0 * (score - lowest) / span)
-        for entry, score in scored
-    ]
+    # The percentage is the honest match, not the position: a pool of poor
+    # candidates should read as a pool of poor candidates, not get stretched so
+    # its least-bad member shows 100%.
+    out = []
+    for entry, _ in scored:
+        match = match_fraction(entry.get("candidate", {}), profile)
+        out.append((entry, 100.0 * match if match is not None else None))
+    return out

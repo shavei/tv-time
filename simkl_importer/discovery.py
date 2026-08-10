@@ -30,9 +30,19 @@ from .taste import (
 )
 
 SECTION_TO_TYPE = {"tv": TV, "movies": MOVIE, "anime": ANIME}
-TYPE_TO_SECTION = {TV: "tv", MOVIE: "movies", ANIME: "anime"}
+
+
 LIBRARY_ENDPOINTS = {"tv": "shows", "movies": "movies", "anime": "anime"}
 LIBRARY_MAX_AGE = 24 * 3600
+
+
+def SUMMARY_SECTION_FOR(media_type: str) -> str:
+    """Which /{section}/{id} endpoint carries the detail for this media type."""
+    return TYPE_TO_SECTION.get(media_type, "tv")
+
+
+TYPE_TO_SECTION = {TV: "tv", MOVIE: "movies", ANIME: "anime"}
+
 
 # how many already-tracked titles we are willing to look up genres for when
 # seeding a taste profile from scratch
@@ -271,6 +281,11 @@ def gather_candidates(
                     if not simkl_id or simkl_id in seen:
                         continue
                     seen.add(simkl_id)
+                    if not candidate.get("genres") and genre not in ("all", "trending", "favourites"):
+                        # Browse results sometimes omit genres entirely, which
+                        # left taste scoring with nothing to work on. We know
+                        # which genre bucket this came out of, so use that.
+                        candidate["genres"] = [genre.replace("-", " ").title()]
                     gathered.append({"candidate": candidate, "section": section, "genre": genre})
                     kept += 1
                     if simkl_id not in exclude:
@@ -503,9 +518,12 @@ def build_session(
     if target and examined > target:
         # ranked is best-first, so the shortlist is simply the head of it
         ranked = ranked[:target]
-        best, worst = ranked[0][1], ranked[-1][1]
-        log(f"  Looked at {examined}, showing the {len(ranked)} closest to your taste"
-            + (f" ({worst:.0f}-{best:.0f}% match)." if not profile.empty else "."))
+        scores = [score for _, score in ranked if score is not None]
+        spread = f" ({min(scores):.0f}-{max(scores):.0f}% match)." if scores else "."
+        log(f"  Looked at {examined}, showing the {len(ranked)} closest to your taste{spread}")
+        if scores and max(scores) < 40:
+            log("  None of these are a strong match - your profile is still thin, "
+                "or these genres are not really yours.")
 
     reasons = []
     if in_library:
@@ -651,7 +669,7 @@ def run_discovery(
             continue
 
         counter = f"[{index + 1}/{len(ranked)}]"
-        lines = detail_lines(candidate, item, match if not profile.empty else None, genre)
+        lines = detail_lines(candidate, item, None if profile.empty else match, genre)
         lines.insert(0, counter)
         print()
         if renderer:

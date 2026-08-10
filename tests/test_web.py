@@ -493,3 +493,99 @@ def test_for_you_does_not_reject_titles_you_never_reached():
 
     assert "mode !== 'foryou' || answered.has(c.id)" in PAGE
     assert "answered.add(c.id)" in PAGE
+
+
+# --------------------------------------------------------------- title detail
+
+
+class DetailClient:
+    def __init__(self, payload=None, boom=False):
+        self.calls = []
+        self.payload = payload if payload is not None else {
+            "overview": "Seven noble families fight for control of Westeros.",
+            "genres": ["Drama", "Fantasy"],
+            "runtime": 55,
+            "network": "HBO",
+        }
+        self.boom = boom
+
+    def summary(self, section, simkl_id):
+        self.calls.append((section, simkl_id))
+        if self.boom:
+            raise RuntimeError("upstream down")
+        return self.payload
+
+
+def test_detail_returns_the_overview_and_genres(tmp_path, session):
+    client = DetailClient()
+    flow = WebFlow(client=client, store=Store(tmp_path / "home"), queue=[])
+    flow.session = session
+
+    detail = flow.detail("1")
+
+    assert detail["overview"].startswith("Seven noble families")
+    assert detail["genres"] == ["Drama", "Fantasy"]
+    assert client.calls == [("tv", "1")]
+
+
+def test_detail_is_cached_forever(tmp_path, session):
+    client = DetailClient()
+    store = Store(tmp_path / "home")
+    flow = WebFlow(client=client, store=store, queue=[])
+    flow.session = session
+
+    flow.detail("1")
+    flow.detail("1")
+    assert len(client.calls) == 1
+
+    # and across processes
+    again = WebFlow(client=client, store=Store(store.home), queue=[])
+    again.session = session
+    assert again.detail("1")["overview"].startswith("Seven noble")
+    assert len(client.calls) == 1
+
+
+def test_detail_uses_the_movies_endpoint_for_a_film(tmp_path, session):
+    client = DetailClient()
+    flow = WebFlow(client=client, store=Store(tmp_path / "home"), queue=[])
+    flow.session = session
+
+    flow.detail("2")  # "Heat", the movie in the fixture
+    assert client.calls == [("movies", "2")]
+
+
+def test_detail_failure_is_reported_not_raised(tmp_path, session):
+    client = DetailClient(boom=True)
+    flow = WebFlow(client=client, store=Store(tmp_path / "home"), queue=[])
+    flow.session = session
+
+    assert flow.detail("1") == {}
+    assert any("Could not load details" in line for line in flow.log_lines())
+
+
+def test_detail_for_an_unknown_id_is_empty(tmp_path, session):
+    client = DetailClient()
+    flow = WebFlow(client=client, store=Store(tmp_path / "home"), queue=[])
+    flow.session = session
+
+    assert flow.detail("99999") == {}
+    assert client.calls == []
+
+
+def test_detail_endpoint_needs_the_token(server):
+    base, flow = server
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        get(f"{base}/api/detail?id=1&token=wrong")
+    assert excinfo.value.code == 403
+
+
+def test_page_shows_a_summary_and_backfills_genres():
+    from simkl_importer.web import PAGE
+
+    assert "api/detail" in PAGE
+    assert "oneOverview" in PAGE
+    assert "Loading summary" in PAGE
+    # the browse endpoints omit genres; the detail call repairs the facts line
+    assert "detail.genres" in PAGE
+    # and it must not paint a stale summary onto the next card
+    assert "candidates[cursor].id !== c.id" in PAGE

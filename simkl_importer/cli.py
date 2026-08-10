@@ -257,6 +257,11 @@ def action_send(args, client: SimklClient, store: Store, queue: List[WatchItem])
         if written:
             print(f"  Wrote rejected item(s) to {written}")
 
+    # The account just changed, so the cached library is out of date. Dropping
+    # it means the next discovery run refetches and will not offer back the
+    # titles we have only this second imported.
+    store.invalidate_library()
+
     if report.batches_failed:
         print("\n  Some batches failed; the queue has been kept so you can re-run --send.")
     else:

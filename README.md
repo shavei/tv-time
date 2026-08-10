@@ -175,6 +175,36 @@ lookups cached forever in `genre-cache.json`).
 `--no-taste` falls back to plain popularity order. `--forget-rejected` starts
 asking about passed-over titles again.
 
+### Never asked twice
+
+Discovery excludes everything you have already answered, using four records —
+no single one of them covers every path:
+
+| File | Holds | Why the others are not enough |
+|---|---|---|
+| `library.json` | what is on your Simkl account | cached for 24h, so it lags a fresh import |
+| `queue.json` | accepted, not yet sent | emptied by `--send` |
+| `accepted.json` | **every** title ever accepted | survives the send — this is the durable record |
+| `rejected.json` | every title declined | only covers the "no" answers |
+
+The gap that matters is accept → `--send` → run discovery again: the queue is
+now empty and the library cache still predates the import, so `accepted.json`
+is the only thing standing between you and being asked all over again. A
+successful send also drops the library cache, so the next run refetches from
+the account rather than trusting a snapshot taken before the write.
+
+Each run tells you what it skipped and why:
+
+```
+  14 title(s) to go through.
+  Skipped 106 you have seen before: 51 already on your account,
+  38 you already marked watched, 17 you already said no to.
+```
+
+To deliberately revisit something: `--forget-rejected` clears the "no" list, and
+deleting `~/.simkl-importer/accepted.json` clears the "yes" list (your Simkl
+account still filters anything actually imported).
+
 ## Rate limiting and quotas
 
 The Simkl developer rules are enforced client-side:

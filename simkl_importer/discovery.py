@@ -326,6 +326,7 @@ def collect_session(
     """
     queued_keys: Set[Any] = {item.dedupe_key() for item in queue}
     rejected: Dict[str, Any] = store.load_rejected()
+    already_accepted: Set[str] = store.accepted_ids()
 
     print("\nWhich do you want to go through?")
     print("  1) TV shows   2) Movies   3) Anime   4) all of them")
@@ -385,28 +386,45 @@ def collect_session(
     if ask("\n  Also include Simkl Trending titles? [y/N]: ").lower().startswith("y"):
         entries.extend(add_trending(client, sections, seen_ids))
 
-    # drop anything already tracked, already queued, or previously rejected
+    # Drop everything already answered. Four separate records, because no one
+    # of them survives every path: the library can be a day stale, the queue is
+    # emptied on send, and rejections and acceptances each only cover one answer.
     filtered: List[Dict[str, Any]] = []
-    in_library = skipped_before = 0
+    in_library = said_no = said_yes = in_queue = 0
     for entry in entries:
         simkl_id = str(candidate_ids(entry["candidate"]).get("simkl") or "")
         if simkl_id and simkl_id in library:
             in_library += 1
             continue
         if simkl_id and simkl_id in rejected:
-            skipped_before += 1
+            said_no += 1
+            continue
+        if simkl_id and simkl_id in already_accepted:
+            said_yes += 1
             continue
         item = candidate_to_item(entry["candidate"], SECTION_TO_TYPE.get(entry["section"], TV))
-        if item is None or item.dedupe_key() in queued_keys:
+        if item is None:
+            continue
+        if item.dedupe_key() in queued_keys:
+            in_queue += 1
             continue
         filtered.append(entry)
 
     ranked = rank_entries(filtered, profile)
 
-    print(
-        f"\n  {len(ranked)} title(s) to go through "
-        f"({in_library} already on your account, {skipped_before} you already said no to)."
-    )
+    skipped = in_library + said_no + said_yes + in_queue
+    print(f"\n  {len(ranked)} title(s) to go through.")
+    if skipped:
+        reasons = []
+        if in_library:
+            reasons.append(f"{in_library} already on your account")
+        if said_yes:
+            reasons.append(f"{said_yes} you already marked watched")
+        if said_no:
+            reasons.append(f"{said_no} you already said no to")
+        if in_queue:
+            reasons.append(f"{in_queue} already queued")
+        print(f"  Skipped {skipped} you have seen before: {', '.join(reasons)}.")
     if not ranked:
         print("  Nothing new to ask about - try more genres, or a larger count per genre.")
     elif not profile.empty:
@@ -418,7 +436,9 @@ def collect_session(
         "rejected": rejected,
         "queued_keys": queued_keys,
         "in_library": in_library,
-        "skipped_before": skipped_before,
+        "said_no": said_no,
+        "said_yes": said_yes,
+        "in_queue": in_queue,
     }
 
 

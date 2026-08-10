@@ -300,3 +300,62 @@ def rank_entries(
         match = match_fraction(entry.get("candidate", {}), profile)
         out.append((entry, 100.0 * match if match is not None else None))
     return out
+
+
+# ------------------------------------------------------------------- reporting
+
+
+def profile_report(profile: TasteProfile, width: int = 24) -> List[str]:
+    """A readable breakdown of what the profile has learned.
+
+    The one-line summary on a card answers "does this look like me?"; this
+    answers "why did it think that?", which is what you need when a
+    recommendation is wrong.
+    """
+    lines: List[str] = []
+    if profile.empty:
+        lines.append("  Nothing learned yet.")
+        lines.append("  Mark some titles as watched and this fills in.")
+        return lines
+
+    sources = [f"{profile.accepted} title(s) you marked watched"]
+    if profile.rejected:
+        sources.append(f"{profile.rejected} you declined")
+    lines.append("  Learned from " + ", ".join(sources) + ".")
+    lines.append("")
+
+    affinity = profile.genre_affinity()
+    liked = sorted(
+        ((g, w) for g, w in affinity.items() if w > 0), key=lambda kv: kv[1], reverse=True
+    )
+    if liked:
+        top = liked[0][1] or 1.0
+        lines.append("  Genres you watch")
+        for genre, weight in liked:
+            filled = max(1, int(round(width * weight / top)))
+            count = profile.accepted_genres.get(genre, 0)
+            lines.append(f"    {genre:<18}{'█' * filled}{'·' * (width - filled)}  {count}")
+
+    disliked = sorted(
+        ((g, w) for g, w in affinity.items() if w < 0), key=lambda kv: kv[1]
+    )
+    if disliked:
+        lines.append("")
+        lines.append("  Genres you have passed on")
+        for genre, _ in disliked:
+            count = profile.rejected_genres.get(genre, 0)
+            lines.append(f"    {genre:<18}{count} declined")
+
+    if profile.decades:
+        lines.append("")
+        lines.append("  When they are from")
+        most = max(profile.decades.values()) or 1
+        for era, count in sorted(profile.decades.items(), reverse=True):
+            filled = max(1, int(round(width * count / most)))
+            lines.append(f"    {str(era) + 's':<18}{'█' * filled}{'·' * (width - filled)}  {count}")
+
+    browse = profile.top_genres(6)
+    if browse:
+        lines.append("")
+        lines.append(f"  Discovery will browse: {', '.join(browse)}")
+    return lines

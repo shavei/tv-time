@@ -287,6 +287,36 @@ the ones you actually answered are recorded, so the rest come round again next
 time. (In the grid this is different, and correctly so: every card was on
 screen, so anything left unselected genuinely means "not watched".)
 
+### It digs until it finds enough
+
+For You aims for **100 titles you have not answered before** (`--count N` to
+change it). The genre endpoints are paginated, so rather than taking page one
+and giving up, it keeps turning pages — across every genre evenly — until that
+many fresh titles have been found, then stops immediately so no quota is spent
+on rows you will never see.
+
+This matters more than it sounds. After a few sessions you can easily have
+several hundred titles answered, and page one of your favourite genres is
+entirely stuff you have already dealt with:
+
+```
+  Looking for 100 title(s) you have not answered yet...
+    tv/drama p1: 50 new (0 unanswered)
+    ...
+    tv/drama p7: 50 new (50 unanswered)
+    tv/drama p8: 50 new (50 unanswered)
+  100 title(s) to go through.
+  Skipped 300 you have seen before: 300 you already said no to.
+```
+
+Ranking still puts the closest matches to your taste first, so digging deeper
+costs relevance nothing — it just gets past the titles you have already ruled
+out. If a genre genuinely runs dry the sweep stops and says so, and suggests
+`--forget-rejected` if the shortfall is mostly things you declined.
+
+The grid keeps to a single page per genre — you configure the sweep there, so
+paging deeper would just multiply requests for rows nobody asked for.
+
 It is also menu option **4**, next to the grid at **3**.
 
 ## Rate limiting and quotas
@@ -349,6 +379,8 @@ and are appended to the same CSV.
 | `--no-posters` | do not draw poster thumbnails in `--tui` mode |
 | `--poster-width N` | poster width in terminal columns (default 22) |
 | `--no-taste` | rank by popularity instead of your taste profile |
+| `--for-you` | one at a time, matched to your taste, no setup screen |
+| `--count N` | how many unanswered titles For You aims to find (default 100) |
 | `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |

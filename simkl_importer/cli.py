@@ -10,7 +10,7 @@ from typing import List, Optional
 from .auth import ensure_token, verify_token
 from .client import AuthError, BudgetExceeded, SimklClient, SimklError
 from .config import DEFAULT_DAILY_LIMIT, Credentials, Store
-from .discovery import ask, collect_session, run_discovery
+from .discovery import DEFAULT_TARGET, ask, collect_session, run_discovery
 from .images import DEFAULT_WIDTH, PosterRenderer
 from .matching import Matcher
 from .models import WatchItem
@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--discover", action="store_true", help="run interactive discovery mode")
     parser.add_argument("--for-you", dest="for_you", action="store_true",
                         help="skip the setup screen: titles picked from your taste, one at a time")
+    parser.add_argument("--count", type=int, default=DEFAULT_TARGET,
+                        help=f"how many unanswered titles For You aims to find (default {DEFAULT_TARGET})")
     parser.add_argument("--send", action="store_true", help="send the saved queue and exit")
     parser.add_argument("--dry-run", action="store_true", help="do everything except the POST")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation before sending")
@@ -226,6 +228,7 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
                 refresh_library=args.refresh_library,
                 use_taste=not args.no_taste,
                 mode="foryou" if for_you else "grid",
+                target=args.count if for_you else None,
             )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")

@@ -259,3 +259,98 @@ def test_anime_genre_path_has_no_country_segment():
     client = RecordingClient()
     SimklClient.genre_titles(client, "anime", genre="action", year="2010s")
     assert client.paths == ["/anime/genres/action/all-types/all-networks/2010s/rank"]
+
+
+# ---------------------------------------------------------------- pagination
+
+
+class PagingClient:
+    """Serves `pages` pages per genre, with unique ids, and records the calls."""
+
+    def __init__(self, pages=3, per_page=10, start=1000):
+        self.pages = pages
+        self.per_page = per_page
+        self.next_id = start
+        self.calls = []
+
+    def genre_titles(self, section, genre="all", sort="rank", limit=20, page=1, year="all-years"):
+        self.calls.append((section, genre, page))
+        if page > self.pages:
+            return []
+        out = []
+        for _ in range(self.per_page):
+            self.next_id += 1
+            out.append({"title": f"T{self.next_id}", "year": 2015, "genres": ["Drama"],
+                        "ids": {"simkl_id": self.next_id}})
+        return out
+
+
+def test_gathering_pages_until_the_target_is_met():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=5, per_page=10)
+    got = gather_candidates(client, ["tv"], ["drama"], per_genre=10, target=25, log=lambda *_: None)
+
+    assert len(got) >= 25
+    # it had to turn pages - one page of ten could never have reached 25
+    assert max(page for _, _, page in client.calls) >= 3
+
+
+def test_gathering_stops_as_soon_as_the_target_is_met():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=8, per_page=10)
+    gather_candidates(client, ["tv"], ["drama"], per_genre=10, target=20, log=lambda *_: None)
+
+    # 2 pages is enough for 20; a third would be wasted quota
+    assert max(page for _, _, page in client.calls) <= 3
+
+
+def test_already_answered_titles_do_not_count_towards_the_target():
+    """The whole point: 300 rejections must not stop it finding fresh ones."""
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=6, per_page=10)
+    # everything on the first three pages is already answered
+    stale = {str(i) for i in range(1001, 1031)}
+    got = gather_candidates(
+        client, ["tv"], ["drama"], per_genre=10, exclude=stale, target=15, log=lambda *_: None
+    )
+
+    fresh = [e for e in got if str(e["candidate"]["ids"]["simkl_id"]) not in stale]
+    assert len(fresh) >= 15
+    assert max(page for _, _, page in client.calls) >= 5
+
+
+def test_gathering_gives_up_when_every_genre_runs_dry():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=2, per_page=5)
+    got = gather_candidates(
+        client, ["tv"], ["drama"], per_genre=5, target=500, max_pages=8, log=lambda *_: None
+    )
+
+    assert len(got) == 10  # 2 pages x 5, then it stopped
+    assert max(page for _, _, page in client.calls) == 3  # one empty page proves the end
+
+
+def test_no_target_means_a_single_page_as_before():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=5, per_page=10)
+    got = gather_candidates(client, ["tv"], ["drama"], per_genre=10, log=lambda *_: None)
+
+    assert len(got) == 10
+    assert [page for _, _, page in client.calls] == [1]
+
+
+def test_pages_sweep_all_genres_before_going_deeper():
+    from simkl_importer.discovery import gather_candidates
+
+    client = PagingClient(pages=5, per_page=2)
+    gather_candidates(
+        client, ["tv"], ["drama", "crime", "comedy"], per_genre=2, target=10, log=lambda *_: None
+    )
+
+    first_pass = [genre for _, genre, page in client.calls if page == 1]
+    assert first_pass == ["drama", "crime", "comedy"]

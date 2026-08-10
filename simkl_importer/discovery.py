@@ -38,6 +38,11 @@ LIBRARY_MAX_AGE = 24 * 3600
 # seeding a taste profile from scratch
 MAX_LIBRARY_SEED = 150
 
+# how many pages deep we are willing to go per genre when filling a target
+MAX_PAGES = 8
+# how many unanswered candidates a taste-driven run aims to put in front of you
+DEFAULT_TARGET = 100
+
 SUGGESTED_GENRES = [
     "action", "adventure", "animation", "comedy", "crime", "documentary",
     "drama", "family", "fantasy", "history", "horror", "mystery", "romance",
@@ -217,30 +222,61 @@ def gather_candidates(
     sort: str = "rank",
     year: str = "all-years",
     seen: Optional[Set[str]] = None,
+    exclude: Optional[Set[str]] = None,
+    target: Optional[int] = None,
+    max_pages: int = MAX_PAGES,
     log=print,
 ) -> List[Dict[str, Any]]:
-    """Pull titles per genre per section, de-duplicated by simkl id."""
-    seen = seen if seen is not None else set()
-    gathered: List[Dict[str, Any]] = []
+    """Pull titles per genre per section, de-duplicated by simkl id.
 
-    for section in sections:
-        for genre in genres:
-            try:
-                results = client.genre_titles(
-                    section, genre=genre, sort=sort, limit=per_genre, year=year
-                )
-            except SimklError as exc:
-                log(f"    {section}/{genre}: skipped ({exc})")
-                continue
-            kept = 0
-            for candidate in results:
-                simkl_id = str(candidate_ids(candidate).get("simkl") or "")
-                if not simkl_id or simkl_id in seen:
+    These endpoints are paginated, and page one of a handful of genres is a few
+    hundred titles at most - which runs dry fast once you have answered for a
+    while. When `target` is set we keep turning pages until that many
+    *unanswered* candidates have been found, counting against `exclude`, and
+    stop as soon as we have enough so nobody pays for pages they will not see.
+    """
+    seen = seen if seen is not None else set()
+    exclude = exclude or set()
+    gathered: List[Dict[str, Any]] = []
+    fresh = 0
+
+    # Without a target there is nothing to fill, so one page each - paging
+    # deeper would multiply the request count for rows nobody asked for.
+    # With one: page 1 of every genre, then page 2 of every genre, so a
+    # shortfall is made up across the board rather than exhausting the first.
+    depth = max(1, max_pages) if target is not None else 1
+    for page in range(1, depth + 1):
+        exhausted = True
+        for section in sections:
+            for genre in genres:
+                if target is not None and fresh >= target:
+                    return gathered
+                try:
+                    results = client.genre_titles(
+                        section, genre=genre, sort=sort, limit=per_genre,
+                        page=page, year=year,
+                    )
+                except SimklError as exc:
+                    log(f"    {section}/{genre} p{page}: skipped ({exc})")
                     continue
-                seen.add(simkl_id)
-                gathered.append({"candidate": candidate, "section": section, "genre": genre})
-                kept += 1
-            log(f"    {section}/{genre}: {kept} new")
+                if results:
+                    exhausted = False
+                kept = new_here = 0
+                for candidate in results:
+                    simkl_id = str(candidate_ids(candidate).get("simkl") or "")
+                    if not simkl_id or simkl_id in seen:
+                        continue
+                    seen.add(simkl_id)
+                    gathered.append({"candidate": candidate, "section": section, "genre": genre})
+                    kept += 1
+                    if simkl_id not in exclude:
+                        fresh += 1
+                        new_here += 1
+                if kept:
+                    suffix = f" ({new_here} unanswered)" if target is not None else ""
+                    log(f"    {section}/{genre} p{page}: {kept} new{suffix}")
+        if exhausted:
+            break  # every genre returned an empty page; there is no more
 
     return gathered
 
@@ -370,6 +406,7 @@ def build_session(
     include_trending: bool = False,
     sort: str = "rank",
     year: str = "all-years",
+    target: Optional[int] = None,
     log=print,
 ) -> Dict[str, Any]:
     """Gather, filter and rank candidates. No prompting - all answers passed in."""
@@ -404,9 +441,19 @@ def build_session(
                     "genre": "favourites",
                 }
             )
+    # everything already answered, so paging can aim at a number of titles you
+    # have actually not seen rather than a number of rows fetched
+    answered_ids: Set[str] = set(library) | set(rejected) | set(already_accepted)
+    for item in queue:
+        if item.ids.get("simkl"):
+            answered_ids.add(str(item.ids["simkl"]))
+
+    if target:
+        log(f"  Looking for {target} title(s) you have not answered yet...")
     entries.extend(
         gather_candidates(
-            client, sections, chosen, per_genre, sort=sort, year=year, seen=seen_ids, log=log
+            client, sections, chosen, per_genre, sort=sort, year=year,
+            seen=seen_ids, exclude=answered_ids, target=target, log=log,
         )
     )
 
@@ -454,8 +501,15 @@ def build_session(
     if skipped:
         log(f"  Skipped {skipped} you have seen before: {', '.join(reasons)}.")
     if not ranked:
-        log("  Nothing new to ask about - try more genres, or a larger count per genre.")
-    elif not profile.empty:
+        log("  Nothing new to ask about.")
+        if said_no:
+            log(f"  {said_no} of those were titles you declined before - "
+                "run with --forget-rejected to be asked about them again.")
+        log("  Otherwise try more genres, a different era, or Simkl Trending.")
+    elif target and len(ranked) < target:
+        log(f"  Only {len(ranked)} left unanswered in these genres "
+            f"(wanted {target}) - widen the genres or era for more.")
+    if ranked and not profile.empty:
         log("  Ordered best-match first based on what you have already accepted.")
 
     return {

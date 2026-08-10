@@ -362,6 +362,41 @@ however well it matched. A genre is never left half-swept either, since
 stopping mid-genre would bias the pool towards whichever section is listed
 first.
 
+### Seeing the profile
+
+```bash
+python -m simkl_importer --profile
+```
+
+The whole thing, and where each part of it came from:
+
+```
+  Learned from 13 title(s) you marked watched, 2 you declined.
+
+  Genres you watch
+    action            ████████████████████████  9
+    thriller          ████████████████████████  9
+    crime             ███████████·············  4
+
+  Genres you have passed on
+    romance           2 declined
+
+  When they are from
+    2010s             ████████████████████████  9
+    2000s             ███████████·············  4
+
+  Discovery will browse: action, thriller, crime
+
+  Built from
+      13 title(s) you marked watched   accepted.json
+       2 you declined                  rejected.json
+      80 already on your Simkl account  library.json
+```
+
+If that does not look like you, the recommendations will not either — and the
+fix is answering **Watched it** on a run of things you know, not tuning
+anything. It is menu option **5** as well.
+
 ### It shows you what it learned
 
 For You has no setup screen, so the top of the card carries the profile it is
@@ -473,6 +508,7 @@ and are appended to the same CSV.
 | `--country CODES` | only titles released here, e.g. `us` or `us,gb` (default: anywhere) |
 | `--no-anime` | leave anime out of For You |
 | `--sort` | catalogue ordering: `rank` (all-time, default), `popular-this-month`, `popular-today` |
+| `--profile` | show what the taste profile has learned, and exit |
 | `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |

@@ -707,3 +707,42 @@ def test_a_genre_is_never_left_half_swept():
     per_genre = Counter(genre for _, genre, _ in client.calls)
     # whichever genres were touched, each got all three sections
     assert set(per_genre.values()) == {3}, per_genre
+
+
+# --------------------------------------------------------------- profile view
+
+
+def test_profile_report_shows_genres_decades_and_declines():
+    from simkl_importer.taste import profile_report
+
+    items = [WatchItem(title=str(i), genres=g, year=y) for i, (g, y) in enumerate(
+        [(["action", "thriller"], 2015)] * 8 + [(["comedy"], 2019)] * 3)]
+    report = "\n".join(profile_report(build_profile(items, [["romance"], ["romance"]])))
+
+    assert "Learned from 11 title(s) you marked watched, 2 you declined." in report
+    assert "Genres you watch" in report
+    assert "action" in report and "thriller" in report
+    assert "Genres you have passed on" in report and "romance" in report
+    assert "When they are from" in report and "2010s" in report
+    assert "Discovery will browse:" in report
+
+
+def test_profile_report_says_so_when_it_knows_nothing():
+    from simkl_importer.taste import TasteProfile, profile_report
+
+    report = "\n".join(profile_report(TasteProfile()))
+    assert "Nothing learned yet" in report
+    assert "fills in" in report
+
+
+def test_profile_report_bars_are_proportional():
+    from simkl_importer.taste import profile_report
+
+    items = ([WatchItem(title=str(i), genres=["action"]) for i in range(10)]
+             + [WatchItem(title="x", genres=["comedy"])])
+    lines = [l for l in profile_report(build_profile(items), width=20) if "█" in l]
+    action = next(l for l in lines if "action" in l)
+    comedy = next(l for l in lines if "comedy" in l)
+
+    assert action.count("█") == 20          # the strongest genre fills the bar
+    assert 0 < comedy.count("█") < 5        # a tenth of it is a short bar

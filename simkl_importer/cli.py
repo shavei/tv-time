@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--count", type=int, default=DEFAULT_TARGET,
                         help=f"how many unanswered titles For You aims to find (default {DEFAULT_TARGET})")
     parser.add_argument("--send", action="store_true", help="send the saved queue and exit")
+    parser.add_argument("--profile", action="store_true",
+                        help="show what the taste profile has learned, and exit")
     parser.add_argument("--dry-run", action="store_true", help="do everything except the POST")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation before sending")
     parser.add_argument("--auth-flow", choices=("oob", "pin"), default="oob",
@@ -184,6 +186,39 @@ def action_import_file(args, client: SimklClient, store: Store, queue: List[Watc
                 print(f"  Wrote {len(unmatched)} unmatched title(s) to {written}")
 
     return merge_into_queue(queue, matched)
+
+
+def action_profile(args, client: SimklClient, store: Store, queue: List[WatchItem]) -> None:
+    """Print what the profile knows, and where it came from."""
+    from .discovery import prepare_taste
+    from .taste import profile_report
+
+    print("\n" + "=" * 60)
+    print("Your taste profile")
+    print("=" * 60 + "\n")
+
+    prepared = prepare_taste(
+        client, store, queue,
+        refresh_library=args.refresh_library,
+        use_taste=not args.no_taste,
+        log=lambda line: None,   # the report is the output here, not the fetch
+    )
+    for line in profile_report(prepared["profile"]):
+        print(line)
+
+    accepted = store.load_accepted()
+    rejected = store.load_rejected()
+    library = (store.load_library() or {}).get("items", {})
+    print()
+    print("  Built from")
+    print(f"    {len(accepted):>4} title(s) you marked watched   accepted.json")
+    print(f"    {len(rejected):>4} you declined                  rejected.json")
+    print(f"    {len(library):>4} already on your Simkl account  library.json")
+    print(f"    {len(queue):>4} waiting to be sent             queue.json")
+    print(f"\n  All of it lives in {store.home}")
+    print("\n  Answering 'Watched it' on things you know is what sharpens this.")
+    print("  --forget-rejected clears the declines; delete accepted.json to")
+    print("  start the profile over.")
 
 
 def parse_countries(raw: str):
@@ -321,10 +356,11 @@ def menu(args, client: SimklClient, store: Store) -> None:
         print("  2) Import from a watched.csv / watched.json")
         print("  3) Discovery mode (a grid of posters to pick from)")
         print("  4) For You (one at a time, matched to your taste)")
-        print("  5) Review and send the queue to Simkl")
-        print("  6) Clear the queue")
-        print("  7) Quit")
-        choice = ask("\n  Choose [5]: ", "5")
+        print("  5) Show my taste profile")
+        print("  6) Review and send the queue to Simkl")
+        print("  7) Clear the queue")
+        print("  8) Quit")
+        choice = ask("\n  Choose [6]: ", "6")
 
         try:
             if choice == "1":
@@ -337,13 +373,15 @@ def menu(args, client: SimklClient, store: Store) -> None:
             elif choice == "4":
                 queue = action_discover(args, client, store, queue, for_you=True)
             elif choice == "5":
+                action_profile(args, client, store, queue)
+            elif choice == "6":
                 queue = action_send(args, client, store, queue)
                 save_queue(store, queue)
-            elif choice == "6":
+            elif choice == "7":
                 store.clear_queue()
                 queue = []
                 print("  Queue cleared.")
-            elif choice in ("7", "q", "quit", "exit"):
+            elif choice in ("8", "q", "quit", "exit"):
                 print("  Bye.")
                 return
             else:
@@ -368,6 +406,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
+        if args.profile:
+            action_profile(args, client, store, load_queue(store))
+            return 0
+
         if args.file or args.discover or args.for_you or args.send:
             queue = load_queue(store)
             if args.file:

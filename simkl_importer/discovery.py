@@ -69,6 +69,21 @@ SORT_CHOICES = [
     ("popular-today", "Popular today"),
 ]
 
+COUNTRY_CHOICES = [
+    ("all-countries", "Anywhere"),
+    ("us", "US"),
+    ("gb", "UK"),
+    ("ca", "Canada"),
+    ("au", "Australia"),
+    ("ie", "Ireland"),
+    ("fr", "France"),
+    ("de", "Germany"),
+    ("es", "Spain"),
+    ("kr", "Korea"),
+    ("jp", "Japan"),
+    ("in", "India"),
+]
+
 ERA_CHOICES = [
     ("all-years", "Any"),
     ("2020s", "2020s"),
@@ -235,6 +250,7 @@ def gather_candidates(
     per_genre: int,
     sort: str = "rank",
     year: str = "all-years",
+    countries: Optional[List[str]] = None,
     seen: Optional[Set[str]] = None,
     exclude: Optional[Set[str]] = None,
     target: Optional[int] = None,
@@ -251,6 +267,7 @@ def gather_candidates(
     """
     seen = seen if seen is not None else set()
     exclude = exclude or set()
+    countries = countries or ["all-countries"]
     gathered: List[Dict[str, Any]] = []
     fresh = 0
 
@@ -262,38 +279,50 @@ def gather_candidates(
     for page in range(1, depth + 1):
         exhausted = True
         for section in sections:
-            for genre in genres:
-                if target is not None and fresh >= target:
-                    return gathered
-                try:
-                    results = client.genre_titles(
-                        section, genre=genre, sort=sort, limit=per_genre,
-                        page=page, year=year,
-                    )
-                except SimklError as exc:
-                    log(f"    {section}/{genre} p{page}: skipped ({exc})")
-                    continue
-                if results:
-                    exhausted = False
-                kept = new_here = 0
-                for candidate in results:
-                    simkl_id = str(candidate_ids(candidate).get("simkl") or "")
-                    if not simkl_id or simkl_id in seen:
+            # the anime endpoint has no country segment, so sweeping countries
+            # there would just fetch the same rows over again
+            section_countries = ["all-countries"] if section == "anime" else countries
+            for country in section_countries:
+                for genre in genres:
+                    if target is not None and fresh >= target:
+                        return gathered
+
+                    try:
+                        results = client.genre_titles(
+                            section, genre=genre, sort=sort, limit=per_genre,
+                            page=page, year=year, country=country,
+                        )
+                    except SimklError as exc:
+                        log(f"    {section}/{genre} p{page}: skipped ({exc})")
                         continue
-                    seen.add(simkl_id)
-                    if not candidate.get("genres") and genre not in ("all", "trending", "favourites"):
-                        # Browse results sometimes omit genres entirely, which
-                        # left taste scoring with nothing to work on. We know
-                        # which genre bucket this came out of, so use that.
-                        candidate["genres"] = [genre.replace("-", " ").title()]
-                    gathered.append({"candidate": candidate, "section": section, "genre": genre})
-                    kept += 1
-                    if simkl_id not in exclude:
-                        fresh += 1
-                        new_here += 1
-                if kept:
-                    suffix = f" ({new_here} unanswered)" if target is not None else ""
-                    log(f"    {section}/{genre} p{page}: {kept} new{suffix}")
+
+                    if results:
+                        exhausted = False
+
+                    kept = new_here = 0
+                    for candidate in results:
+                        simkl_id = str(candidate_ids(candidate).get("simkl") or "")
+                        if not simkl_id or simkl_id in seen:
+                            continue
+                        seen.add(simkl_id)
+                        if not candidate.get("genres") and genre not in ("all", "trending", "favourites"):
+                            # Browse results sometimes omit genres entirely,
+                            # leaving taste scoring nothing to work on. We know
+                            # which bucket this came out of, so use that.
+                            candidate["genres"] = [genre.replace("-", " ").title()]
+                        gathered.append({
+                            "candidate": candidate, "section": section, "genre": genre,
+                        })
+                        kept += 1
+                        if simkl_id not in exclude:
+                            fresh += 1
+                            new_here += 1
+
+                    if kept:
+                        where = "" if country == "all-countries" else f" [{country}]"
+                        suffix = f" ({new_here} unanswered)" if target is not None else ""
+                        log(f"    {section}/{genre}{where} p{page}: {kept} new{suffix}")
+
         if exhausted:
             break  # every genre returned an empty page; there is no more
 
@@ -425,6 +454,7 @@ def build_session(
     include_trending: bool = False,
     sort: str = "rank",
     year: str = "all-years",
+    countries: Optional[List[str]] = None,
     target: Optional[int] = None,
     log=print,
 ) -> Dict[str, Any]:
@@ -481,7 +511,8 @@ def build_session(
     entries.extend(
         gather_candidates(
             client, sections, chosen, per_genre, sort=sort, year=year,
-            seen=seen_ids, exclude=answered_ids, target=pool_target, log=log,
+            countries=countries, seen=seen_ids, exclude=answered_ids,
+            target=pool_target, log=log,
         )
     )
 
@@ -603,6 +634,10 @@ def collect_session(
     except ValueError:
         per_genre = 20
 
+    print("\nWhere from? (blank = anywhere)")
+    print("  e.g. us, gb, us gb - " + ", ".join(v for v, _ in COUNTRY_CHOICES[1:6]) + " ...")
+    countries = [c.lower() for c in parse_list(ask("  > ").replace(" ", ","))] or None
+
     print("\nWhich era? (blank = any)")
     print("  e.g. 2020s, 2010s, 2000s, 1990s")
     year = ask("  > ", "all-years") or "all-years"
@@ -620,6 +655,7 @@ def collect_session(
         per_genre=per_genre,
         include_trending=trending,
         year=year,
+        countries=countries,
     )
 
 

@@ -144,6 +144,22 @@ Ready to send: 14 title(s)
 
 In `--tui` mode the same choice is the `l` answer at the prompt.
 
+### Where things are from
+
+Simkl's genre browse is worldwide by default, and that is a lot of Korean,
+Chinese, Japanese and Indian drama if those are not what you watch. The
+**Where from** chips filter by release country — pick one or several, or leave
+it on *Anywhere*:
+
+```bash
+python -m simkl_importer --for-you --country us,gb
+python -m simkl_importer --for-you --country us --no-anime
+```
+
+Each country is swept separately and the results pooled, so `us,gb` really does
+mean both. Anime is its own section with no country of origin to filter on, so
+`--no-anime` is how you leave it out.
+
 ### Era and order
 
 These two matter more than they look, because the point is to remember what you
@@ -429,6 +445,8 @@ and are appended to the same CSV.
 | `--no-taste` | rank by popularity instead of your taste profile |
 | `--for-you` | one at a time, matched to your taste, no setup screen |
 | `--count N` | how many titles For You shows (default 100, chosen from 4× that many) |
+| `--country CODES` | only titles released here, e.g. `us` or `us,gb` (default: anywhere) |
+| `--no-anime` | leave anime out of For You |
 | `--forget-rejected` | ask again about titles you previously said no to |
 | `--unmatched-out PATH` | where to write the failure report |
 | `--home PATH` | config directory (default `~/.simkl-importer`) |

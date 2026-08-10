@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--discover", action="store_true", help="run interactive discovery mode")
     parser.add_argument("--for-you", dest="for_you", action="store_true",
                         help="skip the setup screen: titles picked from your taste, one at a time")
+    parser.add_argument("--country", default="",
+                        help="only titles released here, e.g. 'us' or 'us,gb' "
+                             "(default: anywhere, which includes a lot of world drama)")
+    parser.add_argument("--no-anime", action="store_true",
+                        help="leave anime out of For You")
     parser.add_argument("--count", type=int, default=DEFAULT_TARGET,
                         help=f"how many unanswered titles For You aims to find (default {DEFAULT_TARGET})")
     parser.add_argument("--send", action="store_true", help="send the saved queue and exit")
@@ -178,6 +183,13 @@ def action_import_file(args, client: SimklClient, store: Store, queue: List[Watc
     return merge_into_queue(queue, matched)
 
 
+def parse_countries(raw: str):
+    """'us, gb' -> ['us', 'gb']; empty means no filter at all."""
+    values = [part.strip().lower() for part in (raw or "").replace(" ", ",").split(",")]
+    values = [value for value in values if value]
+    return values or None
+
+
 def make_renderer(args, client: SimklClient, store: Store) -> PosterRenderer:
     return PosterRenderer(
         session=client.session,
@@ -229,6 +241,8 @@ def action_discover(args, client: SimklClient, store: Store, queue: List[WatchIt
                 use_taste=not args.no_taste,
                 mode="foryou" if for_you else "grid",
                 target=args.count if for_you else None,
+                countries=parse_countries(args.country),
+                sections=["tv", "movies"] if args.no_anime else None,
             )
     except (KeyboardInterrupt, EOFError):
         print("\n  Discovery interrupted; keeping what was queued.")

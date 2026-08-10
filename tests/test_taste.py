@@ -461,15 +461,18 @@ def test_the_pool_is_capped(monkeypatch, tmp_path):
 # ------------------------------------------------------- the match is absolute
 
 
-def test_a_title_sharing_nothing_with_you_scores_near_zero():
+def test_a_title_sharing_nothing_with_you_scores_zero():
     """The bug: min-max stretching made the least-bad candidate read 100%."""
     from simkl_importer.taste import match_fraction
 
     profile = build_profile([WatchItem(title="A", genres=["crime", "thriller"])])
 
-    assert match_fraction({"genres": ["Crime"]}, profile) == pytest.approx(1.0)
     assert match_fraction({"genres": ["Romance"]}, profile) == pytest.approx(0.0)
     assert match_fraction({"genres": ["Documentary", "Music"]}, profile) == pytest.approx(0.0)
+    # matching the profile exactly is what earns 100%
+    assert match_fraction({"genres": ["Crime", "Thriller"]}, profile) == pytest.approx(1.0)
+    # half of it earns notably less
+    assert match_fraction({"genres": ["Crime"]}, profile) < 0.8
 
 
 def test_a_pool_of_bad_matches_stays_a_pool_of_bad_matches():
@@ -526,3 +529,56 @@ def test_unknown_match_survives_the_payload():
     item = WatchItem(title="No Genres", ids={"simkl": 5})
     blank = {"candidate": {"title": "No Genres", "ids": {"simkl_id": 5}}, "genre": "drama"}
     assert candidate_payload(blank, None, item, True)["match"] is None
+
+
+# ------------------------------------------------ match compares genre *shapes*
+
+
+def taste(*genre_lists):
+    return build_profile([WatchItem(title=str(i), genres=g)
+                          for i, g in enumerate(genre_lists)])
+
+
+def test_one_genre_in_common_is_not_a_perfect_match():
+    """The bug: averaging made a single shared genre score 100%."""
+    from simkl_importer.taste import match_fraction
+
+    profile = taste(*([["crime", "thriller"]] * 6 + [["drama"]] * 3 + [["comedy"]] * 2))
+
+    only_crime = match_fraction({"genres": ["Crime"]}, profile)
+    both = match_fraction({"genres": ["Crime", "Thriller"]}, profile)
+
+    assert only_crime < 0.75
+    assert both > only_crime
+    assert both > 0.85
+
+
+def test_covering_more_of_your_profile_scores_higher():
+    from simkl_importer.taste import match_fraction
+
+    profile = taste(["crime", "thriller"], ["crime", "drama"], ["thriller", "drama"])
+    scores = [
+        match_fraction({"genres": ["Crime"]}, profile),
+        match_fraction({"genres": ["Crime", "Thriller"]}, profile),
+        match_fraction({"genres": ["Crime", "Thriller", "Drama"]}, profile),
+    ]
+    assert scores == sorted(scores)
+
+
+def test_an_unrelated_single_genre_still_scores_zero():
+    """The Untamed case: 'Adventure' against a crime/thriller profile."""
+    from simkl_importer.taste import match_fraction
+
+    profile = taste(*([["crime", "thriller"]] * 8))
+    assert match_fraction({"genres": ["Adventure"]}, profile) == 0.0
+    assert match_fraction({"genres": ["Romance", "History"]}, profile) == 0.0
+
+
+def test_diluting_a_match_with_unrelated_genres_lowers_it():
+    from simkl_importer.taste import match_fraction
+
+    profile = taste(*([["crime", "thriller"]] * 8))
+    focused = match_fraction({"genres": ["Crime", "Thriller"]}, profile)
+    diluted = match_fraction({"genres": ["Crime", "Thriller", "Romance", "Musical"]}, profile)
+
+    assert diluted < focused

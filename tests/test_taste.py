@@ -221,3 +221,41 @@ def test_poster_and_genres_survive_a_merge():
 
 def test_default_poster_width_is_sane():
     assert 8 <= DEFAULT_WIDTH <= 60
+
+
+# ----------------------------------------------------------- genre endpoints
+
+
+class RecordingClient:
+    def __init__(self):
+        self.paths = []
+        self.params = []
+
+    def get(self, path, params=None):
+        self.paths.append(path)
+        self.params.append(params or {})
+        return []
+
+
+def test_genre_path_defaults_to_all_time_rank():
+    from simkl_importer.client import SimklClient
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "tv", genre="drama")
+    assert client.paths == ["/tv/genres/drama/all-types/all-countries/all-networks/all-years/rank"]
+
+
+def test_genre_path_takes_an_era_and_a_sort():
+    from simkl_importer.client import SimklClient
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "movies", genre="crime", sort="popular-today", year="2000s")
+    assert client.paths == ["/movies/genres/crime/all-types/all-countries/2000s/popular-today"]
+
+
+def test_anime_genre_path_has_no_country_segment():
+    from simkl_importer.client import SimklClient
+
+    client = RecordingClient()
+    SimklClient.genre_titles(client, "anime", genre="action", year="2010s")
+    assert client.paths == ["/anime/genres/action/all-types/all-networks/2010s/rank"]

@@ -44,6 +44,21 @@ SUGGESTED_GENRES = [
     "science-fiction", "thriller", "war", "western",
 ]
 
+SORT_CHOICES = [
+    ("rank", "Best of all time"),
+    ("popular-this-month", "Popular this month"),
+    ("popular-today", "Popular today"),
+]
+
+ERA_CHOICES = [
+    ("all-years", "Any"),
+    ("2020s", "2020s"),
+    ("2010s", "2010s"),
+    ("2000s", "2000s"),
+    ("1990s", "1990s"),
+    ("1980s", "1980s"),
+]
+
 MENU_HELP = """
     y  yes, I watched it        n  no / skip (remembered, never asked again)
     s  skip the rest of this genre
@@ -198,18 +213,21 @@ def gather_candidates(
     sections: List[str],
     genres: List[str],
     per_genre: int,
-    sort: str = "popular-this-month",
+    sort: str = "rank",
+    year: str = "all-years",
     seen: Optional[Set[str]] = None,
     log=print,
 ) -> List[Dict[str, Any]]:
-    """Pull popular titles per genre per section, de-duplicated by simkl id."""
+    """Pull titles per genre per section, de-duplicated by simkl id."""
     seen = seen if seen is not None else set()
     gathered: List[Dict[str, Any]] = []
 
     for section in sections:
         for genre in genres:
             try:
-                results = client.genre_titles(section, genre=genre, sort=sort, limit=per_genre)
+                results = client.genre_titles(
+                    section, genre=genre, sort=sort, limit=per_genre, year=year
+                )
             except SimklError as exc:
                 log(f"    {section}/{genre}: skipped ({exc})")
                 continue
@@ -349,6 +367,8 @@ def build_session(
     genres: Optional[List[str]] = None,
     per_genre: int = 20,
     include_trending: bool = False,
+    sort: str = "rank",
+    year: str = "all-years",
     log=print,
 ) -> Dict[str, Any]:
     """Gather, filter and rank candidates. No prompting - all answers passed in."""
@@ -383,7 +403,11 @@ def build_session(
                     "genre": "favourites",
                 }
             )
-    entries.extend(gather_candidates(client, sections, chosen, per_genre, seen=seen_ids, log=log))
+    entries.extend(
+        gather_candidates(
+            client, sections, chosen, per_genre, sort=sort, year=year, seen=seen_ids, log=log
+        )
+    )
 
     if include_trending:
         entries.extend(add_trending(client, sections, seen_ids, log=log))
@@ -485,6 +509,10 @@ def collect_session(
     except ValueError:
         per_genre = 20
 
+    print("\nWhich era? (blank = any)")
+    print("  e.g. 2020s, 2010s, 2000s, 1990s")
+    year = ask("  > ", "all-years") or "all-years"
+
     trending = ask("\n  Also include Simkl Trending titles? [y/N]: ").lower().startswith("y")
 
     return build_session(
@@ -497,6 +525,7 @@ def collect_session(
         genres=genres,
         per_genre=per_genre,
         include_trending=trending,
+        year=year,
     )
 
 

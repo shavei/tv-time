@@ -215,22 +215,28 @@ class SimklClient:
         self,
         section: str,
         genre: str = "all",
-        sort: str = "popular-this-month",
+        sort: str = "rank",
         limit: int = 20,
         page: int = 1,
+        year: str = "all-years",
     ) -> list:
-        """Popular titles for a genre.
+        """Titles for a genre.
 
         `section` is tv / movies / anime and the path mirrors the filter URLs on
         simkl.com, e.g. /tv/genres/drama/all-types/all-countries/all-networks/
-        all-years/popular-this-month
+        2010s/rank
+
+        `sort` defaults to `rank` - Simkl's all-time ranking. The alternatives
+        (`popular-this-month`, `popular-today`) return whatever is out *now*,
+        which is the wrong end of the catalogue when the point is to remember
+        what you watched years ago.
         """
         if section == "tv":
-            path = f"/tv/genres/{genre}/all-types/all-countries/all-networks/all-years/{sort}"
+            path = f"/tv/genres/{genre}/all-types/all-countries/all-networks/{year}/{sort}"
         elif section == "anime":
-            path = f"/anime/genres/{genre}/all-types/all-networks/all-years/{sort}"
+            path = f"/anime/genres/{genre}/all-types/all-networks/{year}/{sort}"
         else:
-            path = f"/movies/genres/{genre}/all-types/all-countries/all-years/{sort}"
+            path = f"/movies/genres/{genre}/all-types/all-countries/{year}/{sort}"
         result = self.get(
             path,
             params={"page": page, "limit": limit, "extended": "title,genres"},

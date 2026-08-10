@@ -100,18 +100,34 @@ there. The terminal prints the URL and then waits:
 Three screens:
 
 1. **Setup** — what to browse (TV / movies / anime), favourite titles, genre
-   chips, how many per genre. Your Simkl account is read in the background
-   while you fill this in, so the genres you tend to watch come back
-   pre-selected.
+   chips, **era**, **order by**, and how many per genre. Your Simkl account is
+   read in the background while you fill this in, so the genres you tend to
+   watch come back pre-selected.
 2. **Building** — a live log while candidates are gathered: titles are pulled
-   per genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`,
-   sorted by `popular-this-month`), optionally topped up from Simkl Trending,
-   then filtered and ranked against your taste profile.
+   per genre (`/tv/genres/...`, `/movies/genres/...`, `/anime/genres/...`),
+   optionally topped up from Simkl Trending, then filtered and ranked against
+   your taste profile.
 3. **Picking** — a grid of real posters, best match first. Click everything
    you've watched, filter by title or genre to find things, then **Continue**
    to say how much of each show you saw — `all` by default, or `s1`, `1-3`,
    `s2e5`, `s2e1-10`, or combinations like `s1, s2e1-4`. **Add to queue** hands
    it back to the terminal, which sends it to Simkl.
+
+   Watched none of them? The button says **None of these** — that is a real
+   answer. All of them are recorded as declined, so the next run offers
+   something different instead of the same wall.
+
+### Era and order
+
+These two matter more than they look, because the point is to remember what you
+watched *years ago*:
+
+* **Order by** defaults to **Best of all time** (Simkl's `rank`). The
+  alternatives — `popular-this-month`, `popular-today` — return whatever is out
+  right now, which is a list of things nobody could have watched yet.
+* **Era** narrows to a decade (`2010s`, `2000s`, …). Pick the years you were
+  actually watching and the grid fills with things you might genuinely
+  recognise.
 
 If the browser does not open by itself, paste the printed URL — the script
 tries `webbrowser`, then the platform handler (`start` / `explorer` on Windows,

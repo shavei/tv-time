@@ -346,3 +346,77 @@ def test_open_in_browser_survives_webbrowser_raising(monkeypatch):
                         lambda cmd, **kw: spawned.append(cmd))
     assert open_in_browser("http://127.0.0.1:1/") is True
     assert spawned[0][0] == "open"
+
+
+# ------------------------------------------------------- era and sort choices
+
+
+def test_prep_state_offers_eras_and_sorts(tmp_path):
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[])
+    state = flow.prep_state()
+
+    sorts = {s["value"] for s in state["sorts"]}
+    eras = {e["value"] for e in state["eras"]}
+    assert "rank" in sorts and "popular-this-month" in sorts
+    assert {"all-years", "2010s", "2000s"} <= eras
+    # "best of all time" must be offered first - it is the useful default here
+    assert state["sorts"][0]["value"] == "rank"
+
+
+def test_build_passes_era_and_sort_through(tmp_path, monkeypatch):
+    import simkl_importer.discovery as discovery
+    from simkl_importer.taste import TasteProfile
+
+    seen = {}
+
+    def capture(client, store, queue, prepared, **kwargs):
+        seen.update(kwargs)
+        return {"ranked": [], "profile": TasteProfile(), "rejected": {},
+                "queued_keys": set(), "skipped": 0, "skip_reasons": []}
+
+    monkeypatch.setattr(discovery, "build_session", capture)
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[])
+    flow.prepared = {"library": {}, "profile": TasteProfile(), "suggested": []}
+    flow._build({"sections": ["tv"], "sort": "rank", "year": "2000s", "per_genre": 30})
+
+    assert seen["sort"] == "rank"
+    assert seen["year"] == "2000s"
+    assert seen["per_genre"] == 30
+
+
+def test_build_defaults_to_all_time_rank(tmp_path, monkeypatch):
+    import simkl_importer.discovery as discovery
+    from simkl_importer.taste import TasteProfile
+
+    seen = {}
+
+    def capture(client, store, queue, prepared, **kwargs):
+        seen.update(kwargs)
+        return {"ranked": [], "profile": TasteProfile(), "rejected": {},
+                "queued_keys": set(), "skipped": 0, "skip_reasons": []}
+
+    monkeypatch.setattr(discovery, "build_session", capture)
+    flow = WebFlow(client=None, store=Store(tmp_path / "home"), queue=[])
+    flow.prepared = {"library": {}, "profile": TasteProfile(), "suggested": []}
+    flow._build({"sections": ["tv"]})
+
+    assert seen["sort"] == "rank"
+    assert seen["year"] == "all-years"
+
+
+def test_none_of_these_still_records_every_rejection(flow):
+    """Watching none of them is an answer, not a dead end."""
+    result = flow.commit({"accepted": [], "rejected": ["1", "2"]})
+
+    assert result == {"ok": True, "queued": 0, "rejected": 2}
+    assert flow.finished.is_set()
+    assert flow.session.accepted == []
+    assert sorted(flow.session.rejected_ids) == ["1", "2"]
+
+
+def test_page_offers_a_none_of_these_button(flow):
+    from simkl_importer.web import PAGE
+
+    assert "None of these" in PAGE
+    # and the button must not be disabled at zero selections any more
+    assert "disabled = step === 'pick' && picked.size === 0" not in PAGE

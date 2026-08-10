@@ -208,7 +208,7 @@ class WebFlow:
             self.log(f"  Could not load your taste profile: {exc}")
 
     def prep_state(self) -> Dict[str, Any]:
-        from .discovery import SUGGESTED_GENRES
+        from .discovery import ERA_CHOICES, SORT_CHOICES, SUGGESTED_GENRES
 
         return {
             "ready": self.prepared is not None or bool(self.prep_error),
@@ -217,6 +217,8 @@ class WebFlow:
             "summary": (self.prepared or {}).get("summary", ""),
             "all_genres": SUGGESTED_GENRES,
             "sections": SECTION_LABELS,
+            "sorts": [{"value": v, "label": l} for v, l in SORT_CHOICES],
+            "eras": [{"value": v, "label": l} for v, l in ERA_CHOICES],
             "log": self.log_lines(),
         }
 
@@ -244,6 +246,8 @@ class WebFlow:
                 genres=[g for g in (options.get("genres") or []) if str(g).strip()],
                 per_genre=int(options.get("per_genre") or 20),
                 include_trending=bool(options.get("trending")),
+                sort=str(options.get("sort") or "rank"),
+                year=str(options.get("year") or "all-years"),
                 log=self.log,
             )
             self.session_data = data
@@ -558,8 +562,21 @@ PAGE = r"""<!doctype html>
     </div>
 
     <div class="field">
+      <label>Era</label>
+      <div class="chips" id="eras"></div>
+      <p class="muted">Narrow it to when you were actually watching.</p>
+    </div>
+
+    <div class="field">
+      <label>Order by</label>
+      <div class="chips" id="sorts"></div>
+      <p class="muted">"Best of all time" is what you want for a watch history —
+         the popularity options return whatever is out right now.</p>
+    </div>
+
+    <div class="field">
       <label for="perGenre">Titles per genre</label>
-      <input type="number" id="perGenre" value="20" min="1" max="50" style="width:90px">
+      <input type="number" id="perGenre" value="30" min="1" max="50" style="width:90px">
       <label style="display:inline-block;margin-left:20px;font-weight:400">
         <input type="checkbox" id="trending"> also include Simkl Trending
       </label>
@@ -599,11 +616,29 @@ let step = 'setup';
 let candidates = [], picked = new Set();
 let chosenSections = new Set(['tv', 'movies', 'anime']);
 let chosenGenres = new Set();
+let chosenSort = 'rank';
+let chosenEra = 'all-years';
 
 function show(name) {
   ['setup', 'building', 'pick', 'detail', 'done'].forEach(s =>
     $(s).classList.toggle('hide', s !== name));
   step = name;
+}
+
+function radioChips(container, options, current, onPick) {
+  container.textContent = '';
+  options.forEach(opt => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'chip' + (opt.value === current ? ' on' : '');
+    el.textContent = opt.label;
+    el.onclick = () => {
+      container.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+      el.classList.add('on');
+      onPick(opt.value);
+    };
+    container.appendChild(el);
+  });
 }
 
 function chip(label, on, onToggle) {
@@ -645,6 +680,9 @@ function renderSetup(prep) {
       active => active ? chosenGenres.add(name) : chosenGenres.delete(name)));
   });
 
+  radioChips($('eras'), prep.eras, chosenEra, v => { chosenEra = v; });
+  radioChips($('sorts'), prep.sorts, chosenSort, v => { chosenSort = v; });
+
   if (prep.error) {
     $('profileLine').textContent = 'Could not read your account: ' + prep.error;
   } else if (prep.summary) {
@@ -668,8 +706,10 @@ async function startBuild() {
     sections: Array.from(chosenSections),
     genres: Array.from(chosenGenres),
     favourites: $('favourites').value.split(',').map(s => s.trim()).filter(Boolean),
-    per_genre: parseInt($('perGenre').value, 10) || 20,
+    per_genre: parseInt($('perGenre').value, 10) || 30,
     trending: $('trending').checked,
+    sort: chosenSort,
+    year: chosenEra,
   };
   if (!body.sections.length) {
     return showErrors(['Pick at least one of TV shows, Movies or Anime.']);
@@ -798,7 +838,11 @@ function render() {
 function refreshCount() {
   if (step !== 'pick' && step !== 'detail') { $('count').textContent = ''; return; }
   $('count').textContent = picked.size + ' of ' + candidates.length + ' selected';
-  $('next').disabled = step === 'pick' && picked.size === 0;
+  if (step === 'pick') {
+    // "I have watched none of these" is a real answer, not a dead end: it marks
+    // them all as seen-and-declined so they never come round again.
+    $('next').textContent = picked.size ? 'Continue' : 'None of these';
+  }
 }
 
 // ------------------------------------------------------------------ detail
@@ -876,15 +920,17 @@ async function commit() {
   showErrors([]);
   show('done');
   $('heading').textContent = 'Done';
-  $('doneText').textContent =
-    data.queued + ' title(s) queued, ' + data.rejected + ' marked as not watched.';
+  $('doneText').textContent = data.queued
+    ? data.queued + ' title(s) queued, ' + data.rejected + ' marked as not watched.'
+    : 'None of those ' + data.rejected + ' — noted, you will not be asked about them again. '
+      + 'Run the command again for a different era or genre.';
   ['next', 'back', 'filter'].forEach(id => $(id).classList.add('hide'));
   $('count').textContent = '';
 }
 
 $('next').onclick = () => {
   if (step === 'setup') return startBuild();
-  if (step === 'pick') return showDetail();
+  if (step === 'pick') return picked.size ? showDetail() : commit();
   if (step === 'detail') return commit();
 };
 $('back').onclick = () => { if (step === 'detail') backToPick(); };
